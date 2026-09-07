@@ -16,8 +16,8 @@ I intend on reviewing code, testing, and editing documentation regularly. If you
 Microphone capture with push-to-talk or voice activation, a pluggable codec, one jitter
 buffer per speaker, and routing to everybody, to a team, or to whoever is close enough.
 
-Needs **dot-core** and nothing else. Works with [dot-moderation](../dot-moderation) and
-[dot-server](../dot-server) without importing either.
+Needs **dot-core** and nothing else. Works with [dot-moderation](https://github.com/modcommunity/dot-moderation) and
+[dot-server](https://github.com/modcommunity/dot-server) without importing either.
 
 ```bash
 ln -s ../../dot-core/addons/dot_core addons/dot_core
@@ -70,9 +70,9 @@ mismatch is not an error, it is noise or speech at the wrong speed.
 - **Echo cancellation and noise suppression.** Both are real signal processing and belong
   in a GDExtension. Push-to-talk is the reason this is usable without them.
 - **A voice UI.** `talking_changed`, `speaker_changed` and `input_level()` are what a HUD
-  needs. Drawing it is [dot-ui](../dot-ui)'s or your game's.
+  needs. Drawing it is [dot-ui](https://github.com/modcommunity/dot-ui)'s or your game's.
 - **A transport.** `send_fn` takes bytes. Putting them on a wire is the host's, exactly
-  as in [dot-net](../dot-net).
+  as in [dot-net](https://github.com/modcommunity/dot-net).
 - **Proof that the microphone works.** The device layer needs an audio device, so the
   headless suite cannot cover it and says so in its last section rather than leaving you
   to find out.
