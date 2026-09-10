@@ -325,7 +325,7 @@ func _test_packet_refusals() -> void:
 	var future := DotVoicePacket.new()
 	future.sample_count = 480
 	var bytes := future.to_bytes()
-	bytes.encode_u8(0, 99)
+	bytes.encode_u8(DotVoicePacket.OFFSET_VERSION, 99)
 	_check(
 		not DotVoicePacket.from_bytes(bytes).ok,
 		"a version this build does not read",
@@ -337,7 +337,7 @@ func _test_packet_refusals() -> void:
 	var huge := DotVoicePacket.new()
 	huge.sample_count = 480
 	var huge_bytes := huge.to_bytes()
-	huge_bytes.encode_u16(6, 60000)
+	huge_bytes.encode_u16(DotVoicePacket.OFFSET_SAMPLE_COUNT, 60000)
 	_check(
 		not DotVoicePacket.from_bytes(huge_bytes, 2000).ok,
 		"a frame length beyond the limit is refused rather than clamped"
@@ -346,16 +346,38 @@ func _test_packet_refusals() -> void:
 	var zero := DotVoicePacket.new()
 	zero.sample_count = 480
 	var zero_bytes := zero.to_bytes()
-	zero_bytes.encode_u16(6, 0)
+	zero_bytes.encode_u16(DotVoicePacket.OFFSET_SAMPLE_COUNT, 0)
 	_check(not DotVoicePacket.from_bytes(zero_bytes).ok, "and so is a zero-length frame")
 
 	var bad_codec := DotVoicePacket.new()
 	bad_codec.sample_count = 480
 	var bad_bytes := bad_codec.to_bytes()
-	bad_bytes.encode_u8(9, 7)
+	bad_bytes.encode_u8(DotVoicePacket.OFFSET_CODEC, 7)
 	_check(
 		not DotVoicePacket.from_bytes(bad_bytes).ok,
 		"and a codec slot that does not exist"
+	)
+
+	# [b]A speaker id that does not fit in 16 bits.[/b] Godot hands a multiplayer peer a
+	# 31-bit random number, so this is not an edge case — it is every peer on every real
+	# connection. Version 1 wrote `speaker & 0xFFFF`, which matched nobody on the
+	# receiving end and, worse, made two players whose ids differ only above bit 16 into
+	# one speaker: one jitter buffer, interleaved sequence numbers, one stateful decoder,
+	# and both of them noise. game-simple-lobby's sandbox found it by asking a listener
+	# who was talking and getting a number that was not anybody's peer id.
+	var far := DotVoicePacket.new()
+	far.speaker = 1399616023
+	far.sample_count = 480
+	far.payload = PackedByteArray()
+	far.payload.resize(240)
+
+	var round_tripped := DotVoicePacket.from_bytes(far.to_bytes())
+	_check(round_tripped.ok, "a packet from a real peer id parses")
+	_check(
+		round_tripped.ok and (round_tripped.value as DotVoicePacket).speaker == far.speaker,
+		"and its speaker survives the wire (%d)"
+			% ((round_tripped.value as DotVoicePacket).speaker if round_tripped.ok else -1),
+		"a 16-bit speaker field is two players sharing one voice"
 	)
 	_done()
 

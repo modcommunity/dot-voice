@@ -24,7 +24,7 @@ DotVoiceSink    -> DotVoiceSinkPlayer         AudioStreamGenerator, flat or posi
                 -> DotVoiceSinkBuffer         keeps what a listener would have heard
 ```
 
-`examples/voice_selftest.tscn` runs 99 checks with **no audio device in the process**,
+`examples/voice_selftest.tscn` runs 101 checks with **no audio device in the process**,
 and everything between the two ends is the code a player runs. It already found a bug in
 this addon's own capability check, described below.
 
@@ -161,8 +161,36 @@ godot --headless --path . --import
 find . -name '*.gd' -not -path './.godot/*' | while read f; do
     godot --headless --path . --check-only --script "res://${f#./}"
 done
-godot --headless --path . res://examples/voice_selftest.tscn   # 99 checks
+godot --headless --path . res://examples/voice_selftest.tscn   # 101 checks
 ```
+
+## The bug running it in a real game found
+
+**The speaker id was 16 bits, and a Godot peer id is 31.** `DotVoicePacket` wrote
+`speaker & 0xFFFF`, so a listener receiving a relayed frame got a number that matched
+nobody: a host drawing "who is talking" over somebody's head has no way to resolve it,
+and `active_speakers()` returns ids that are not peer ids. That half is merely useless.
+
+The half that is not: **two players whose ids differ only above bit 16 are one speaker to
+every listener.** Their frames go into one jitter buffer with interleaved sequence
+numbers, through one stateful ADPCM decoder — which the addon's own `_ensure_speaker`
+gives each speaker separately for exactly this reason — and both of them come out as
+noise. Sixty-four players against a 16-bit space is about a 3% chance per server, so it is
+a bug that happens to somebody every week and is unexplainable when it does. Nothing
+errors on either end.
+
+**This suite could not see it and now can.** Every check here drives the router and the
+jitter buffer directly with speaker numbers like 2 and 7, all of which fit in 16 bits —
+the shape this family keeps naming: *a suite that cannot distinguish "agrees" from "was
+never asked to disagree" is the suite that finds nothing.* It was found by
+`game-simple-lobby/examples/sandbox.tscn`, the first thing in the family to relay a frame
+between two real clients over real sockets and then ask a listener **who** was talking.
+
+The format is version 2 now, so an old build refuses a new packet rather than misreading
+it. Fixing it also broke three checks that had byte offsets written in by hand and would
+have passed for the wrong reason — the offsets are `DotVoicePacket.OFFSET_*` and are used
+by the encoder, the decoder and the suite, because two copies of one list is this
+family's most repeated bug.
 
 ## Things deliberately not here
 

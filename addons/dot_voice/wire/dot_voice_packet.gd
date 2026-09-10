@@ -19,7 +19,9 @@ extends RefCounted
 ##
 ## - [b]speaker[/b] because a listener receives a relayed packet and has to know whose
 ##   jitter buffer it belongs in. A transport's own sender id is the SERVER on every
-##   relayed packet, which is the same for everyone.
+##   relayed packet, which is the same for everyone. It is 32 bits wide, because a Godot
+##   peer id is a 31-bit random number and a narrower field is two players sharing one
+##   voice — see [constant VERSION].
 ## - [b]sequence[/b] because UDP reorders, and a jitter buffer that cannot order frames
 ##   plays them in arrival order, which is worse than dropping the late one.
 ## - [b]sample count[/b] because a stateful codec cannot always tell from the bytes, and
@@ -32,8 +34,38 @@ extends RefCounted
 ##
 ## The version byte is first so a future format can be refused rather than misread.
 
-const VERSION := 1
-const HEADER_BYTES := 10
+## [b]Version 2 widened the speaker field from 16 bits to 32.[/b] Godot assigns a
+## multiplayer peer a 31-bit random id, so `speaker & 0xFFFF` is not a peer id: it matches
+## nobody on the receiving end, and — the part that is not merely cosmetic — two players
+## whose ids differ only above bit 16 become ONE speaker to every listener. Their frames
+## go into one jitter buffer with interleaved sequence numbers, through one stateful ADPCM
+## decoder, and both come out as noise with nothing erroring anywhere. Sixty-four players
+## against a 16-bit space is about a 3% chance per server of two of them colliding, which
+## is a bug that happens to somebody every week and is unexplainable when it does.
+##
+## Found by game-simple-lobby's sandbox, which is the first thing in this family to relay
+## a frame between two real clients over real sockets and then ask a listener WHO was
+## talking. dot-voice's own suite could not see it: it drives the router and the jitter
+## buffer directly with small speaker numbers, and every one of them fits in 16 bits.
+const VERSION := 2
+
+## Where each header field sits, named once.
+##
+## [b]Named because the version-2 widening broke three tests that had the numbers written
+## in by hand.[/b] They poked a byte at offset 6 to build a malformed packet, offset 6 had
+## become the sequence rather than the sample count, and the checks then asserted that a
+## packet with a strange sequence number was refused — which it is not, and should not be.
+## Every one of them still passed for the wrong reason the moment the offsets moved back
+## by luck. This family's most repeated bug is two copies of one list; these are the list.
+const OFFSET_VERSION := 0
+const OFFSET_FLAGS := 1
+const OFFSET_SPEAKER := 2
+const OFFSET_SEQUENCE := 6
+const OFFSET_SAMPLE_COUNT := 8
+const OFFSET_CHANNEL := 10
+const OFFSET_CODEC := 11
+
+const HEADER_BYTES := 12
 
 ## Codec ids that fit in one byte. Anything else goes in the extended form, so a project
 ## that registers its own codec still works, just with a few more bytes of header.
@@ -77,13 +109,17 @@ func to_bytes() -> PackedByteArray:
 	var name_bytes := String(codec_id).to_utf8_buffer() if extended else PackedByteArray()
 	out.resize(HEADER_BYTES + (1 + name_bytes.size() if extended else 0) + payload.size())
 
-	out.encode_u8(0, VERSION)
-	out.encode_u8(1, FLAG_START if starts_talk_spurt else 0)
-	out.encode_u16(2, speaker & 0xFFFF)
-	out.encode_u16(4, sequence & 0xFFFF)
-	out.encode_u16(6, sample_count & 0xFFFF)
-	out.encode_u8(8, channel & 0xFF)
-	out.encode_u8(9, CODEC_EXTENDED if extended else index)
+	out.encode_u8(OFFSET_VERSION, VERSION)
+	out.encode_u8(OFFSET_FLAGS, FLAG_START if starts_talk_spurt else 0)
+	# [b]32 bits, because a Godot peer id is a 31-bit random number.[/b] See the note on
+	# [constant VERSION]. `& 0xFFFFFFFF` rather than a bare assignment so a host that
+	# passes something larger — an occupant id, a database row — truncates predictably
+	# instead of writing garbage into the two bytes after it.
+	out.encode_u32(OFFSET_SPEAKER, speaker & 0xFFFFFFFF)
+	out.encode_u16(OFFSET_SEQUENCE, sequence & 0xFFFF)
+	out.encode_u16(OFFSET_SAMPLE_COUNT, sample_count & 0xFFFF)
+	out.encode_u8(OFFSET_CHANNEL, channel & 0xFF)
+	out.encode_u8(OFFSET_CODEC, CODEC_EXTENDED if extended else index)
 
 	var at := HEADER_BYTES
 
@@ -114,7 +150,7 @@ static func from_bytes(bytes: PackedByteArray, max_samples: int = 4096) -> DotRe
 			"%d bytes" % bytes.size()
 		)
 
-	var version := bytes.decode_u8(0)
+	var version := bytes.decode_u8(OFFSET_VERSION)
 	if version != VERSION:
 		return DotResult.fail(
 			DotError.CODE_UNSUPPORTED,
@@ -123,12 +159,12 @@ static func from_bytes(bytes: PackedByteArray, max_samples: int = 4096) -> DotRe
 		)
 
 	var packet := DotVoicePacket.new()
-	var flags := bytes.decode_u8(1)
+	var flags := bytes.decode_u8(OFFSET_FLAGS)
 	packet.starts_talk_spurt = (flags & FLAG_START) != 0
-	packet.speaker = bytes.decode_u16(2)
-	packet.sequence = bytes.decode_u16(4)
-	packet.sample_count = bytes.decode_u16(6)
-	packet.channel = bytes.decode_u8(8)
+	packet.speaker = bytes.decode_u32(OFFSET_SPEAKER)
+	packet.sequence = bytes.decode_u16(OFFSET_SEQUENCE)
+	packet.sample_count = bytes.decode_u16(OFFSET_SAMPLE_COUNT)
+	packet.channel = bytes.decode_u8(OFFSET_CHANNEL)
 
 	if packet.sample_count <= 0 or packet.sample_count > max_samples:
 		# A packet claiming a million samples is either a bug or an attempt to make the
@@ -140,7 +176,7 @@ static func from_bytes(bytes: PackedByteArray, max_samples: int = 4096) -> DotRe
 			"%d samples, limit %d" % [packet.sample_count, max_samples]
 		)
 
-	var codec_index := bytes.decode_u8(9)
+	var codec_index := bytes.decode_u8(OFFSET_CODEC)
 	var at := HEADER_BYTES
 
 	if codec_index == CODEC_EXTENDED:
