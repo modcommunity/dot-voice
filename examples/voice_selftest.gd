@@ -18,6 +18,8 @@ extends Node
 ## The one thing it cannot cover is the device layer itself, and that is said out loud
 ## rather than papered over: see the last section.
 
+const CHECKS := 101
+
 var _passed := 0
 var _failed := 0
 var _failures := PackedStringArray()
@@ -63,6 +65,15 @@ func _run() -> void:
 	for line in _failures:
 		print("  FAIL  %s" % line)
 
+	# The total the section counter cannot be. A runtime error inside a section aborts
+	# that function, and the counter is satisfied because the section had already
+	# announced itself. See docs/testing.md.
+	if _passed + _failed != CHECKS:
+		print("ERROR: %d checks ran, %d expected. A section aborted part-way." % [
+			_passed + _failed, CHECKS
+		])
+		get_tree().quit(1)
+		return
 	get_tree().quit(1 if _failed > 0 else 0)
 
 
