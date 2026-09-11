@@ -13,11 +13,9 @@ I intend on reviewing code, testing, and editing documentation regularly. If you
 
 ## Voice Chat for Godot 4
 
-Microphone capture with push-to-talk or voice activation, a pluggable codec, one jitter
-buffer per speaker, and routing to everybody, to a team, or to whoever is close enough.
+Microphone capture with push-to-talk or voice activation, a pluggable codec, one jitter buffer per speaker, and routing to everybody, to a team, or to whoever is close enough.
 
-Needs **dot-core** and nothing else. Works with [dot-moderation](https://github.com/modcommunity/dot-moderation) and
-[dot-server](https://github.com/modcommunity/dot-server) without importing either.
+Needs **dot-core** and nothing else. Works with [dot-moderation](https://github.com/modcommunity/dot-moderation) and [dot-server](https://github.com/modcommunity/dot-server) without importing either.
 
 ```bash
 ln -s ../../dot-core/addons/dot_core addons/dot_core
@@ -37,19 +35,11 @@ godot --headless --path . res://examples/voice_selftest.tscn   # 99 checks
 
 ### Three things worth knowing before you use it
 
-**Nothing opens a microphone on its own.** Not on ready, not because a config flag was
-true in an exported default. `start_capture()` is an explicit call you make after the
-player has agreed, and it returns a failure you can put on screen.
+**Nothing opens a microphone on its own.** Not on ready, not because a config flag was true in an exported default. `start_capture()` is an explicit call you make after the player has agreed, and it returns a failure you can put on screen.
 
-**The devices are behind an interface, which is why there is a test suite at all.**
-`DotVoiceSource` and `DotVoiceSink` have a real implementation and a buffer
-implementation. The suite writes samples in one end and reads audio out of the other with
-no audio device in the process, so the gate, the codec, the packet, the router and the
-jitter buffer all run the code a player runs. Same idea as `DotFpsSampler`.
+**The devices are behind an interface, which is why there is a test suite at all.** `DotVoiceSource` and `DotVoiceSink` have a real implementation and a buffer implementation. The suite writes samples in one end and reads audio out of the other with no audio device in the process, so the gate, the codec, the packet, the router and the jitter buffer all run the code a player runs. Same idea as `DotFpsSampler`.
 
-**Both ends must agree on the format.** Sample rate, frame length and codec.
-`DotVoiceConfig.format_fingerprint()` is one number to exchange at handshake, because a
-mismatch is not an error, it is noise or speech at the wrong speed.
+**Both ends must agree on the format.** Sample rate, frame length and codec. `DotVoiceConfig.format_fingerprint()` is one number to exchange at handshake, because a mismatch is not an error, it is noise or speech at the wrong speed.
 
 ### Where a game plugs in
 
@@ -65,14 +55,8 @@ mismatch is not an error, it is noise or speech at the wrong speed.
 
 ### What is deliberately not here
 
-- **Opus.** Godot exposes no Opus encoder to GDScript. The codec interface exists so a
-  GDExtension can be dropped in; the two shipped are what the language can do.
-- **Echo cancellation and noise suppression.** Both are real signal processing and belong
-  in a GDExtension. Push-to-talk is the reason this is usable without them.
-- **A voice UI.** `talking_changed`, `speaker_changed` and `input_level()` are what a HUD
-  needs. Drawing it is [dot-ui](https://github.com/modcommunity/dot-ui)'s or your game's.
-- **A transport.** `send_fn` takes bytes. Putting them on a wire is the host's, exactly
-  as in [dot-net](https://github.com/modcommunity/dot-net).
-- **Proof that the microphone works.** The device layer needs an audio device, so the
-  headless suite cannot cover it and says so in its last section rather than leaving you
-  to find out.
+- **Opus.** Godot exposes no Opus encoder to GDScript. The codec interface exists so a GDExtension can be dropped in; the two shipped are what the language can do.
+- **Echo cancellation and noise suppression.** Both are real signal processing and belong in a GDExtension. Push-to-talk is the reason this is usable without them.
+- **A voice UI.** `talking_changed`, `speaker_changed` and `input_level()` are what a HUD needs. Drawing it is [dot-ui](https://github.com/modcommunity/dot-ui)'s or your game's.
+- **A transport.** `send_fn` takes bytes. Putting them on a wire is the host's, exactly as in [dot-net](https://github.com/modcommunity/dot-net).
+- **Proof that the microphone works.** The device layer needs an audio device, so the headless suite cannot cover it and says so in its last section rather than leaving you to find out.
