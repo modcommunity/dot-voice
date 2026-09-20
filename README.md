@@ -60,3 +60,7 @@ godot --headless --path . res://examples/voice_selftest.tscn   # 99 checks
 - **A voice UI.** `talking_changed`, `speaker_changed` and `input_level()` are what a HUD needs. Drawing it is [dot-ui](https://github.com/modcommunity/dot-ui)'s or your game's.
 - **A transport.** `send_fn` takes bytes. Putting them on a wire is the host's, exactly as in [dot-net](https://github.com/modcommunity/dot-net).
 - **Proof that the microphone works.** The device layer needs an audio device, so the headless suite cannot cover it and says so in its last section rather than leaving you to find out.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
