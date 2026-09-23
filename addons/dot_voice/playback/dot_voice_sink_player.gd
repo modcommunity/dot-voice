@@ -14,7 +14,9 @@ extends DotVoiceSink
 ## expected to hold the frame rather than throw it away, which is what the jitter buffer
 ## is for.
 
-const CHANNEL := "voice.sink"
+# No log channel: an audio sink written to once per voice frame. A failed start() is
+# returned and DotVoiceManager WARNs it with the speaker; an overrun is prevented by the
+# can_accept() check above and counted as skips in describe(), not a line per frame.
 
 ## Seconds the generator buffers. Bigger survives a frame hitch and costs latency.
 var buffer_seconds: float = 0.2
