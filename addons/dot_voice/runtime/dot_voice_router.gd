@@ -81,6 +81,20 @@ var team_fn: Callable = Callable()
 ## Returns the world position of a speaker, for [constant Channel.PROXIMITY]. Optional.
 var position_fn: Callable = Callable()
 
+## Whether a listener inside [member proximity_range] can actually hear the speaker, for
+## [constant Channel.PROXIMITY]. Optional:
+## [code]func(listener: int, speaker: int, listener_at: Vector3, speaker_at: Vector3) -> bool[/code].
+##
+## [b]A range is not a room.[/b] Two people either side of a wall can be well inside one,
+## and this addon cannot know that — it knows positions and nothing about a level, and a
+## wall list here would be a second copy of a level to keep in step with the first. So
+## the host is asked, after the squared-distance test has ruled out everybody it can
+## (this is the hottest loop in the router), with the positions [member position_fn]
+## already produced. dot-chat's router has the same seam with the same signature, so one
+## function answers both and a player cannot read somebody they cannot hear. Unset, the
+## range is the whole answer.
+var can_hear_fn: Callable = Callable()
+
 ## Returns the listeners a [constant Channel.CUSTOM] packet goes to. Optional.
 var listener_filter: Callable = Callable()
 
@@ -273,8 +287,13 @@ func _listeners_for(packet: DotVoicePacket) -> PackedInt64Array:
 					continue
 				# Squared, so no square root runs per listener per frame. At fifty
 				# frames a second times a full server this is the hottest loop here.
-				if (at as Vector3).distance_squared_to(origin as Vector3) <= range_squared:
-					out.append(peer)
+				if (at as Vector3).distance_squared_to(origin as Vector3) > range_squared:
+					continue
+				if can_hear_fn.is_valid() and not bool(
+					can_hear_fn.call(int(peer), packet.speaker, at, origin)
+				):
+					continue
+				out.append(peer)
 			return out
 
 		_:

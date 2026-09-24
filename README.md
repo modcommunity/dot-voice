@@ -49,7 +49,7 @@ godot --headless --path . res://examples/voice_selftest.tscn   # 99 checks
 | Where audio comes from | `DotVoiceSource` subclass |
 | Where audio goes | `DotVoiceSink` subclass, or `DotVoiceManager.sink_factory` |
 | The codec | `DotVoiceCodec` subclass plus `DotVoiceCodec.register` |
-| Who hears whom | `DotVoiceRouter.team_fn` / `position_fn` / `listener_filter` |
+| Who hears whom | `DotVoiceRouter.team_fn` / `position_fn` + `can_hear_fn` / `listener_filter` |
 | Who may be heard at all | Anything with `is_voice_muted(peer)` registered as `dot_mute_source` |
 | Feel and bandwidth | `DotVoiceConfig` |
 

@@ -24,7 +24,7 @@ DotVoiceSink    -> DotVoiceSinkPlayer         AudioStreamGenerator, flat or posi
                 -> DotVoiceSinkBuffer         keeps what a listener would have heard
 ```
 
-`examples/voice_selftest.tscn` runs 101 checks with **no audio device in the process**,
+`examples/voice_selftest.tscn` runs 103 checks with **no audio device in the process**,
 and everything between the two ends is the code a player runs. It already found a bug in
 this addon's own capability check, described below.
 
@@ -139,6 +139,7 @@ the muted player's own client would have to cooperate.
 - **A team channel with no `team_fn` reaches nobody, not everybody.** A team channel that
   leaks to the other team is a competitive game broken in a way nobody reports, because it
   sounds exactly like working.
+- **A range is not a room.** `can_hear_fn(listener, speaker, listener_at, speaker_at) -> bool` is asked on `PROXIMITY` after the squared-distance test, only about listeners in range, with the positions `position_fn` produced. The host's level decides what blocks sound; this addon knows positions and must not learn walls. It has dot-chat's `DotChatRouter.can_hear_fn` signature on purpose, so one function answers both and nobody reads a line from somebody they cannot hear. Armed in "the server decides who hears whom": with the call disabled, both of its checks fail.
 - **Never back to the speaker.** Hearing yourself at a round trip's delay is the single
   most disorienting thing a voice system can do.
 
@@ -161,7 +162,7 @@ godot --headless --path . --import
 find . -name '*.gd' -not -path './.godot/*' | while read f; do
     godot --headless --path . --check-only --script "res://${f#./}"
 done
-godot --headless --path . res://examples/voice_selftest.tscn   # 101 checks
+godot --headless --path . res://examples/voice_selftest.tscn   # 103 checks
 ```
 
 ## The bug running it in a real game found

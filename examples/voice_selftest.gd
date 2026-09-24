@@ -18,7 +18,7 @@ extends Node
 ## The one thing it cannot cover is the device layer itself, and that is said out loud
 ## rather than papered over: see the last section.
 
-const CHECKS := 101
+const CHECKS := 103
 
 var _passed := 0
 var _failed := 0
@@ -866,6 +866,25 @@ func _test_router() -> void:
 		if int(entry["peer"]) == 3:
 			far_heard = true
 	_check(not far_heard, "and not the far")
+
+	# [b]A range is not a room.[/b] The host stands a wall at x = 7: peer 2 at x = 5 is on
+	# the speaker's side and peer 4 at x = 9 is not, though both are in range. Peer 3 is
+	# out of range and must not even be asked about.
+	delivered.clear()
+	var asked: Array[int] = []
+	router.can_hear_fn = func(listener: int, speaker: int, listener_at: Vector3, speaker_at: Vector3) -> bool:
+		asked.append(listener)
+		return speaker == 1 and (listener_at.x < 7.0) == (speaker_at.x < 7.0)
+	router.relay(1, make.call(DotVoiceRouter.Channel.PROXIMITY, 1))
+	_check(
+		delivered.size() == 1 and int(delivered[0]["peer"]) == 2,
+		"can_hear_fn takes out a listener the range let in (%d delivered)" % delivered.size()
+	)
+	_check(
+		asked.size() == 2 and asked.has(2) and asked.has(4),
+		"and is asked only about listeners in range (%s)" % str(asked)
+	)
+	router.can_hear_fn = Callable()
 
 	# Muting, on the server, where it cannot be ignored by the person being muted.
 	delivered.clear()
