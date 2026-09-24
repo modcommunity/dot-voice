@@ -70,7 +70,10 @@ func reset() -> void:
 func duplicate_codec() -> DotVoiceCodec:
 	# A real copy, every time. Two speakers sharing one instance interleave their
 	# predictors, and the result is not slightly wrong, it is loud noise on both.
-	return DotVoiceCodecAdpcm.new()
+	# Not this class's own name. A script that names itself in an expression, loaded after
+	# its base, cuts Godot 4.7.2's exit teardown short and leaks every script loaded before
+	# it. See docs/gdscript-hazards.md, "A script that names itself".
+	return new()
 
 
 func bytes_for(sample_count: int) -> int:
