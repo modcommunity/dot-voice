@@ -374,7 +374,7 @@ func _test_packet_refusals() -> void:
 	# connection. Version 1 wrote `speaker & 0xFFFF`, which matched nobody on the
 	# receiving end and, worse, made two players whose ids differ only above bit 16 into
 	# one speaker: one jitter buffer, interleaved sequence numbers, one stateful decoder,
-	# and both of them noise. game-simple-lobby's sandbox found it by asking a listener
+	# and both of them noise. A two-client sandbox found it by asking a listener
 	# who was talking and getting a number that was not anybody's peer id.
 	var far := DotVoicePacket.new()
 	far.speaker = 1399616023

@@ -184,8 +184,8 @@ errors on either end.
 jitter buffer directly with speaker numbers like 2 and 7, all of which fit in 16 bits —
 the shape this family keeps naming: *a suite that cannot distinguish "agrees" from "was
 never asked to disagree" is the suite that finds nothing.* It was found by
-`game-simple-lobby/examples/sandbox.tscn`, the first thing in the family to relay a frame
-between two real clients over real sockets and then ask a listener **who** was talking.
+the first suite in the family to relay a frame between two real clients over real
+sockets and then ask a listener **who** was talking.
 
 The format is version 2 now, so an old build refuses a new packet rather than misreading
 it. Fixing it also broke three checks that had byte offsets written in by hand and would

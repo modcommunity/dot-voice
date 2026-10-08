@@ -43,8 +43,7 @@ extends RefCounted
 ## against a 16-bit space is about a 3% chance per server of two of them colliding, which
 ## is a bug that happens to somebody every week and is unexplainable when it does.
 ##
-## Found by game-simple-lobby's sandbox, which is the first thing in this family to relay
-## a frame between two real clients over real sockets and then ask a listener WHO was
+## Found by the first suite in this family to relay a frame between two real clients over real sockets and then ask a listener WHO was
 ## talking. dot-voice's own suite could not see it: it drives the router and the jitter
 ## buffer directly with small speaker numbers, and every one of them fits in 16 bits.
 const VERSION := 2
