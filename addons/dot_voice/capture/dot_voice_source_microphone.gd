@@ -120,7 +120,11 @@ func start() -> DotResult:
 
 	if _bus_index < 0:
 		_bus_index = AudioServer.bus_count
-		AudioServer.add_bus(_bus_index)
+		# bus_count, not add_bus(): on a web build add_bus() goes through Godot's JS
+		# `Bus.move`, which puts the new bus AHEAD of Master and unplugs Master from the
+		# speakers -- the first press of push-to-talk would silence the whole game. See
+		# DotAudioMixer._create_bus in dot-audio for the measurement.
+		AudioServer.bus_count = _bus_index + 1
 		AudioServer.set_bus_name(_bus_index, bus_name)
 
 	# Muted, and sent nowhere audible. Without this the player hears their own microphone
