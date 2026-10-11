@@ -5,13 +5,13 @@ extends RefCounted
 ## One frame of encoded speech, as it travels.
 ##
 ## [codeblock]
-## byte  0     version (1)
+## byte  0     version (2)
 ## byte  1     flags
-## bytes 2-3   speaker id, unsigned
-## bytes 4-5   sequence, unsigned, wraps
-## bytes 6-7   sample count in this frame
-## byte  8     channel
-## byte  9     codec id index, or 255 with a length-prefixed name
+## bytes 2-5   speaker id, unsigned 32-bit
+## bytes 6-7   sequence, unsigned, wraps
+## bytes 8-9   sample count in this frame
+## byte  10    channel
+## byte  11    codec id index, or 255 with a length-prefixed name
 ## bytes ...   payload
 ## [/codeblock]
 ##
