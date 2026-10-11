@@ -203,6 +203,8 @@ func _exit_tree() -> void:
 	if _client_published:
 		DotRegistry.unregister_instance(CLIENT_SERVICE, self)
 		_client_published = false
+	if DotRegistry.signals().service_registered.is_connected(_on_service_registered):
+		DotRegistry.signals().service_registered.disconnect(_on_service_registered)
 
 
 # --- Capture ---------------------------------------------------------------
@@ -364,8 +366,16 @@ func set_server_enabled(on: bool) -> void:
 ## fallback) -> String` and a `replicated_cvar_changed(name, value)` signal. True when
 ## following. Duck-typed, the shape dot-combat's `follow_cvars` has; a source that cannot
 ## replicate (an older shell's link) leaves voice on, which is what every client did before.
+##
+## [b]A null source waits for one[/b]: the shell's link (`dot_client_link` in the registry)
+## may be published after a game builds its voice, and a client that asked too early would
+## otherwise keep voice on for ever against a server that turned it off. Returns false then,
+## and follows the link the moment it is registered.
 func follow_cvars(source: Object) -> bool:
 	if source == null or not is_instance_valid(source):
+		var bus := DotRegistry.signals()
+		if not bus.service_registered.is_connected(_on_service_registered):
+			bus.service_registered.connect(_on_service_registered)
 		return false
 	if not source.has_method(&"replicated_cvar") or not source.has_signal(&"replicated_cvar_changed"):
 		return false
@@ -377,6 +387,17 @@ func follow_cvars(source: Object) -> bool:
 	if not source.is_connected(&"replicated_cvar_changed", _on_replicated_cvar):
 		source.connect(&"replicated_cvar_changed", _on_replicated_cvar)
 	return true
+
+
+## Registry name of the shell's client link, which carries the server's replicated cvars.
+const LINK_SERVICE := &"dot_client_link"
+
+
+func _on_service_registered(service: StringName, instance: Object) -> void:
+	if service != LINK_SERVICE or instance == null:
+		return
+	DotRegistry.signals().service_registered.disconnect(_on_service_registered)
+	var _following := follow_cvars(instance)
 
 
 func _on_replicated_cvar(cvar_name: String, value: String) -> void:

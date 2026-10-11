@@ -18,7 +18,7 @@ extends Node
 ## The one thing it cannot cover is the device layer itself, and that is said out loud
 ## rather than papered over: see the last section.
 
-const CHECKS := 136
+const CHECKS := 138
 
 var _passed := 0
 var _failed := 0
@@ -1117,6 +1117,22 @@ func _test_server_switch() -> void:
 	_check(listener.server_enabled and told == [false, true], "the server turning it on reaches the manager (%s)" % str(told))
 	_check(not listener.follow_cvars(RefCounted.new()),
 		"a source that cannot replicate is refused, and voice stays as it was")
+
+	# Asked before the shell published its link: it waits for one.
+	var late := DotVoiceManager.new()
+	late.name = "LateListener"
+	late.config = config
+	late.config_file = ""
+	late.register_service = false
+	add_child(late)
+	await get_tree().process_frame
+	var late_link := FakeLink.new()
+	late_link.values[DotVoiceRouter.CVAR_ENABLE] = "0"
+	_check(not late.follow_cvars(null) and late.server_enabled, "with no link yet it follows nothing")
+	DotRegistry.register(DotVoiceManager.LINK_SERVICE, late_link)
+	_check(not late.server_enabled, "and follows the link the moment the shell publishes it")
+	DotRegistry.unregister_instance(DotVoiceManager.LINK_SERVICE, late_link)
+	late.queue_free()
 
 	listener.queue_free()
 	router.queue_free()
