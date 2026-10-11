@@ -157,6 +157,9 @@ func start() -> DotResult:
 	_player.name = "DotVoiceMicrophone"
 	_player.stream = input_stream if input_stream != null else AudioStreamMicrophone.new()
 	_player.bus = bus_name
+	# A stream, never a sample: a browser build plays samples by default, and a microphone
+	# cannot be one (it falls back with a warning).
+	_player.playback_type = AudioServer.PLAYBACK_TYPE_STREAM
 	host.add_child(_player)
 	_player.play()
 

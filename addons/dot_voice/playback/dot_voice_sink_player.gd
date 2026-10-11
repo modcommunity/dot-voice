@@ -73,6 +73,12 @@ func start() -> DotResult:
 		player.stream = generator
 		_player = player
 
+	# A stream, never a sample. A browser build plays samples by default, and a generator
+	# cannot be one: it falls back with a warning per speaker. Asked for by name so this
+	# parses on an engine without the property.
+	if &"playback_type" in _player:
+		_player.set(&"playback_type", AudioServer.PLAYBACK_TYPE_STREAM)
+
 	if AudioServer.get_bus_index(bus) >= 0:
 		_player.set(&"bus", bus)
 

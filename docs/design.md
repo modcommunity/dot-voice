@@ -18,7 +18,14 @@ DotVoiceSink    -> DotVoiceSinkPlayer         AudioStreamGenerator, flat or posi
 
 ## The device layer is not covered, and that is said out loud
 
-`DotVoiceSourceMicrophone` and `DotVoiceSinkPlayer` need an audio device, so a headless run cannot exercise them, and a test that required one would fail on the machine it is meant to protect. The suite's last section (`_test_device_layer_is_not_covered`) prints that rather than leaving somebody to assume otherwise. A code path only one deployment shape reaches is a code path nothing has run: put on a headset before trusting either class.
+`DotVoiceSourceMicrophone` and `DotVoiceSinkPlayer` need an audio device, so a headless run cannot exercise them, and a test that required one would fail on the machine it is meant to protect. The suite's last section (`_test_device_layer_is_not_covered`) prints that rather than leaving somebody to assume otherwise, and names the two checks below that do run them.
+
+### The device layer and the browser
+
+- **`tools/voice_device_probe.sh`** runs under `xvfb-run`, where the driver is ALSA rather than Dummy. Godot's ALSA driver has **no input at all** (only PulseAudio, WASAPI, CoreAudio and the web driver implement `input_start`), so on a Linux box without PulseAudio no microphone can open. The probe plays a 440 Hz tone into the capture bus instead (`DotVoiceSourceMicrophone.input_stream`); everything after the driver's input runs as for a person: the capture effect at the engine's mix rate, resampling to the wire rate, the encoder, two clients and a router on real WebSockets, and a `DotVoiceSinkPlayer` on the device. It measures the pitch at the far end, because a capture read at the wrong rate is loud and wrong.
+- **`node tools/web_voice_check.mjs`** exports `examples/web_voice_probe.tscn` with the no-threads web template (the one the client shell uses), serves it, runs `examples/web_voice_server.gd` natively with a bot that talks a tone, and drives Chromium with its fake microphone through Playwright. It asserts the page makes **no `getUserMedia` call before V is pressed**, that holding V asks for it, that the browser's speech reaches the native bot through the server, and that the bot's speech plays in the page. Measured 2026-10-11: AudioWorklet driver at 48 kHz, all of it working.
+- **The web needs three things a game does not control from GDScript.** `audio/driver/enable_input=true` in the exported project (for a delivered game, the client shell's `project.godot`); a secure context (https, or localhost); and, when the page is framed, the frame must be allowed the microphone: the parent's `Permissions-Policy` must delegate `microphone` to the frame's origin and the `<iframe>` must carry `allow="microphone"`. Without the last two the browser refuses `getUserMedia` and the capture reads silence.
+- **Both players are streams** (`playback_type = PLAYBACK_TYPE_STREAM`): a browser build plays samples by default, and neither a generator nor a microphone can be one.
 
 ### `AudioServer` lies about having a sound card
 
@@ -82,9 +89,17 @@ A client asking another client not to play a muted player is not muting anybody,
 
 **A moderator's mute and a player's own mute list are different features.** `DotVoiceRouter` enforces the first on the server; `DotVoiceManager.local_mutes` applies the second on the listener's machine. Conflating them gives a punishment the punished player can decline.
 
+## The server's switch
+
+`DotVoiceRouter.enabled` is the operator's `sv_voice_enable` and `forced_channel` their `sv_voice_mode` (0 the game decides, 1 everybody, 2 team, 3 nearby). `bind_cvars(add, flags)` registers both through a module's `add_cvar`, in dot-combat's duck-typed shape, and reads back a value set before it ran (argv, the deploy's `content.yml`). **Off is enforced on the router**: a client told voice is off stops capturing and hides its key, but a modified client keeps sending, and only the relay can make "off" mean off. A refused frame is counted (`refused_disabled`) and the speaker is not told, as with a mute. Registered with dot-server's `FLAG_REPLICATED`, the value reaches every client's `DotClientLink`, and `DotVoiceManager.follow_cvars(link)` turns it into `server_enabled` and `server_enabled_changed`.
+
+**The game's channel is the router's, not the packet's.** `default_channel` is what every packet is relayed on, and the mode overrides it. The packet's channel field is written by the client, so a team-only game that trusted it was team-only for every player who did not change one byte; `honour_packet_channel` is for a game that gives players a team key and an all key.
+
 ## Privacy
 
 **Nothing opens a microphone on its own**: not on ready, not because an exported default was true. `start_capture()` is an explicit call the host makes after the player has agreed, and it returns a `DotResult` the host can show. A game that records people because a node entered the tree records people who did not ask.
+
+**The first press of the talk key is the agreement.** A client calls `DotVoiceManager.update_talk(held)` every frame (`is_talk_held()` reads the `dot_voice_talk` action, V when nothing bound it); the first press opens the microphone and later presses gate it. In a browser that is also when the permission prompt appears, attached to the key the player just pressed rather than to a page load, and a key press is the user gesture a browser wants before it starts audio. Open-mic mode (`set_open_mic`) opens on the same first press and then stays open. A refusal is returned on the first frame of a press and not on the rest of it. The microphone stays open once opened: reopening it per press costs the driver's start-up on every word.
 
 ## Deliberately not here
 

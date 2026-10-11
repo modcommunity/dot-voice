@@ -19,7 +19,9 @@ Needs **dot-core** and nothing else. Works with [dot-moderation](https://github.
 
 ```bash
 ln -s ../../dot-core/addons/dot_core addons/dot_core
-godot --headless --path . res://examples/voice_selftest.tscn   # 99 checks
+godot --headless --path . res://examples/voice_selftest.tscn   # 136 checks
+tools/voice_device_probe.sh                                     # a real audio device, under Xvfb
+node tools/web_voice_check.mjs                                  # a real browser, with a fake microphone
 ```
 
 ### What you get
@@ -30,12 +32,14 @@ godot --headless --path . res://examples/voice_selftest.tscn   # 99 checks
 | **Codecs** | `pcm16` (exact) and `adpcm` (a quarter of the bandwidth). Register your own, including an Opus GDExtension, and nothing else changes. |
 | **Wire** | A ten-byte header carrying speaker, sequence, frame length, channel and codec. Every field is bounds-checked, because a voice packet arrives before its sender has done anything trustworthy. |
 | **Playback** | A jitter buffer per speaker that reorders, drops duplicates, caps its own growth, and fades over a lost frame rather than cutting to silence. |
-| **Routing** | All, team, proximity, or a filter you write. Decided on the server. |
+| **Routing** | All, team, proximity, or a filter you write. Decided on the server, on the game's channel, never the one a client wrote. |
+| **On and off** | `sv_voice_enable` and `sv_voice_mode` as server cvars (`DotVoiceRouter.bind_cvars`), enforced on the relay; clients follow the replicated value and hide their key. |
+| **The browser** | Works in a web export: the microphone is asked for on the first press of the talk key, never on load. |
 | **Muting** | A moderator's mute is enforced on the server. A player's own mute list is applied on their machine. Those are different features and it matters. |
 
 ### Three things worth knowing before you use it
 
-**Nothing opens a microphone on its own.** Not on ready, not because a config flag was true in an exported default. `start_capture()` is an explicit call you make after the player has agreed, and it returns a failure you can put on screen.
+**Nothing opens a microphone on its own.** Not on ready, not because a config flag was true in an exported default. Call `update_talk(held)` every frame: the first press of the talk key opens the microphone, which is the player agreeing (and, in a browser, the moment the permission prompt appears). Your project needs `audio/driver/enable_input=true`.
 
 **The devices are behind an interface, which is why there is a test suite at all.** `DotVoiceSource` and `DotVoiceSink` have a real implementation and a buffer implementation. The suite writes samples in one end and reads audio out of the other with no audio device in the process, so the gate, the codec, the packet, the router and the jitter buffer all run the code a player runs. Same idea as `DotFpsSampler`.
 
@@ -59,7 +63,7 @@ godot --headless --path . res://examples/voice_selftest.tscn   # 99 checks
 - **Echo cancellation and noise suppression.** Both are real signal processing and belong in a GDExtension. Push-to-talk is the reason this is usable without them.
 - **A voice UI.** `talking_changed`, `speaker_changed` and `input_level()` are what a HUD needs. Drawing it is [dot-ui](https://github.com/modcommunity/dot-ui)'s or your game's.
 - **A transport.** `send_fn` takes bytes. Putting them on a wire is the host's, exactly as in [dot-net](https://github.com/modcommunity/dot-net).
-- **Proof that the microphone works.** The device layer needs an audio device, so the headless suite cannot cover it and says so in its last section rather than leaving you to find out.
+- **A Linux microphone without PulseAudio.** Godot's ALSA driver has no input. The device probe plays a tone into the capture bus instead, so everything after the driver is still tested.
 
 ## Licence
 
