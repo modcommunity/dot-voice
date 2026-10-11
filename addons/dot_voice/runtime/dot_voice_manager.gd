@@ -28,6 +28,23 @@ extends Node
 const CHANNEL := "voice"
 const SERVICE := &"dot_voice_manager"
 
+## Registry name of the manager that is this process's own player's voice: what a settings
+## menu binds its voice rows to. Not [constant SERVICE]: a suite running a server and two
+## clients in one process holds several managers, and only the host knows which one is the
+## person at the keyboard. Published with [method publish_as_client].
+const CLIENT_SERVICE := &"dot_voice_client"
+
+## The InputMap action held to talk. dot-menu's key table stores it as `bind_voice_talk`;
+## [method ensure_talk_action] creates it on [constant DEFAULT_TALK_KEY] when nothing has.
+const TALK_ACTION := &"dot_voice_talk"
+
+## The key the talk action is created on: V, the genre's, by physical position.
+const DEFAULT_TALK_KEY := KEY_V
+
+## The bus voices play on when the project has one: dot-audio's mixer creates it and
+## dot-menu's `voice_volume` sets it.
+const VOICE_BUS := &"Voice"
+
 ## The gate opened or closed. For a microphone icon.
 signal talking_changed(talking: bool)
 
@@ -39,6 +56,10 @@ signal speaker_changed(speaker: int, speaking: bool)
 
 ## Capture could not be started or had to stop.
 signal capture_failed(error: DotError)
+
+## The server turned voice on or off ([method set_server_enabled]). A HUD hides its
+## microphone and a menu its voice rows on false.
+signal server_enabled_changed(enabled: bool)
 
 @export_group("Configuration")
 
@@ -79,6 +100,26 @@ var source: DotVoiceSource = null
 ## [DotVoiceSinkBuffer] in a test.
 var sink_factory: Callable = Callable()
 
+## Where a speaker is, for [member positional_playback]:
+## [code]func(speaker: int) -> Variant[/code], a Vector3 or null for "not in the world".
+##
+## [b]Positional with no position is a voice at the world's origin[/b], which a listener
+## more than a range away never hears and one nearby hears from the wrong side. So
+## positional playback is only used when this is set; without it every voice is flat.
+var speaker_position_fn: Callable = Callable()
+
+## Whether the server lets anybody talk. Off: nothing is captured or sent, what arrives is
+## dropped, and [signal server_enabled_changed] tells a HUD to hide its key. The router
+## enforces it regardless ([member DotVoiceRouter.enabled]); this is the client's half.
+var server_enabled: bool = true
+
+## Open microphone instead of push to talk: the gate opens on loudness. The player's
+## choice ([method set_open_mic]).
+var open_mic: bool = false
+
+## The bus voices play on, if the project has it. See [constant VOICE_BUS].
+var playback_bus: StringName = VOICE_BUS
+
 ## Speakers this client has chosen not to hear.
 ##
 ## [b]A preference, not a punishment, and the distinction matters.[/b] This is applied
@@ -98,6 +139,8 @@ var bytes_sent: int = 0
 var bytes_received: int = 0
 
 var _capturing: bool = false
+var _capture_refused: bool = false
+var _client_published: bool = false
 var _encoder: DotVoiceCodec = null
 var _sequence: int = 0
 var _playback_root: Node = null
@@ -131,7 +174,8 @@ func _ready() -> void:
 		return
 
 	gate = DotVoiceGate.new()
-	gate.push_to_talk = config.push_to_talk
+	open_mic = open_mic or not config.push_to_talk
+	gate.push_to_talk = not open_mic
 	gate.activation_rms = config.activation_rms
 	gate.release_ratio = config.release_ratio
 	gate.hangover_ms = config.hangover_ms
@@ -156,6 +200,9 @@ func _exit_tree() -> void:
 		_destroy_speaker(int(speaker))
 	if _registered_name != &"":
 		DotRegistry.unregister_instance(_registered_name, self)
+	if _client_published:
+		DotRegistry.unregister_instance(CLIENT_SERVICE, self)
+		_client_published = false
 
 
 # --- Capture ---------------------------------------------------------------
@@ -221,7 +268,148 @@ func is_capturing() -> bool:
 ## Sets the push-to-talk key state.
 func set_talking(pressed: bool) -> void:
 	if gate != null:
-		gate.set_pressed(pressed)
+		gate.set_pressed(pressed and server_enabled)
+
+
+## The talk key, held or not, once a frame: what a client calls instead of [method
+## set_talking] and [method start_capture].
+##
+## [b]The first press is the player's consent, and it is where the microphone opens.[/b]
+## Not at load, not when a node entered the tree: a browser shows its permission prompt the
+## moment a page asks, and a prompt on load is a prompt nobody connected to talking. A key
+## press is also the user gesture a browser wants before it lets a page start audio. In
+## open-mic mode the same first press opens it, and it then stays open.
+##
+## Returns the failure to start, once, for the host to show; success otherwise.
+func update_talk(held: bool) -> DotResult:
+	if not server_enabled:
+		if is_talking():
+			set_talking(false)
+		return DotResult.success(false)
+
+	if held and not _capturing and not _capture_refused:
+		var started := start_capture()
+		if not started.ok:
+			# Once per press, not once per frame: a machine with no microphone holding V
+			# would otherwise log fifty lines a second.
+			_capture_refused = true
+			return started
+
+	if not held:
+		_capture_refused = false
+
+	set_talking(held)
+	return DotResult.success(held)
+
+
+## Switches between push to talk and an open microphone. The microphone itself still opens
+## on the first press of the talk key ([method update_talk]).
+func set_open_mic(on: bool) -> void:
+	open_mic = on
+	if config != null:
+		config.push_to_talk = not on
+	if gate != null:
+		gate.push_to_talk = not on
+		gate.reset()
+
+
+## Which input device the engine captures from: a name from [method input_devices], or
+## "Default". Unknown names are refused rather than passed on, because the engine falls
+## back to the default with nothing more than an error in the console.
+func set_input_device(device: String) -> bool:
+	if device == "" or not input_devices().has(device):
+		return false
+	if AudioServer.input_device != device:
+		AudioServer.input_device = device
+		DotLog.info(CHANNEL, "input device set", {"device": device})
+	return true
+
+
+## The engine's input devices; "Default" is always first.
+static func input_devices() -> PackedStringArray:
+	return AudioServer.get_input_device_list()
+
+
+## How loud other players are, 0..1. On the voice bus when there is one (where dot-menu's
+## `voice_volume` and dot-audio's mixer already put it), otherwise on every speaker's player.
+func set_volume(linear: float) -> void:
+	var v := clampf(linear, 0.0, 4.0)
+	var bus := AudioServer.get_bus_index(playback_bus)
+	if bus >= 0:
+		AudioServer.set_bus_volume_db(bus, linear_to_db(v) if v > 0.0 else -80.0)
+		return
+	if config != null:
+		config.output_gain = v
+	for key in _speakers.keys():
+		var sink: Variant = _speakers[key]["sink"]
+		if sink is DotVoiceSinkPlayer:
+			(sink as DotVoiceSinkPlayer).gain = v
+
+
+## Turns voice on or off on the server's word: stops capture and playback when off.
+func set_server_enabled(on: bool) -> void:
+	if on == server_enabled:
+		return
+	server_enabled = on
+	if not on:
+		stop_capture()
+		for speaker in _speakers.keys():
+			_destroy_speaker(int(speaker))
+	DotLog.info(CHANNEL, "the server turned voice chat %s" % ("on" if on else "off"))
+	server_enabled_changed.emit(on)
+
+
+## Keeps [member server_enabled] on the server's `sv_voice_enable`, as [param source]
+## reports it: dot-server's `DotClientLink`, or anything with `replicated_cvar(name,
+## fallback) -> String` and a `replicated_cvar_changed(name, value)` signal. True when
+## following. Duck-typed, the shape dot-combat's `follow_cvars` has; a source that cannot
+## replicate (an older shell's link) leaves voice on, which is what every client did before.
+func follow_cvars(source: Object) -> bool:
+	if source == null or not is_instance_valid(source):
+		return false
+	if not source.has_method(&"replicated_cvar") or not source.has_signal(&"replicated_cvar_changed"):
+		return false
+
+	var held := String(source.call(&"replicated_cvar", DotVoiceRouter.CVAR_ENABLE, ""))
+	if held != "":
+		_on_replicated_cvar(DotVoiceRouter.CVAR_ENABLE, held)
+
+	if not source.is_connected(&"replicated_cvar_changed", _on_replicated_cvar):
+		source.connect(&"replicated_cvar_changed", _on_replicated_cvar)
+	return true
+
+
+func _on_replicated_cvar(cvar_name: String, value: String) -> void:
+	if cvar_name != DotVoiceRouter.CVAR_ENABLE:
+		return
+	var text := value.strip_edges()
+	if text.is_valid_float():
+		set_server_enabled(text.to_float() != 0.0)
+
+
+## Publishes this manager as the process's own player's voice ([constant CLIENT_SERVICE]),
+## for a settings menu to bind. Unpublished when it leaves the tree.
+func publish_as_client() -> void:
+	DotRegistry.register(CLIENT_SERVICE, self)
+	_client_published = true
+
+
+## Creates [constant TALK_ACTION] on [constant DEFAULT_TALK_KEY] if nothing has. A key table
+## that binds it first (dot-menu's) wins, because this only fills a gap.
+static func ensure_talk_action() -> void:
+	if InputMap.has_action(TALK_ACTION):
+		return
+	InputMap.add_action(TALK_ACTION)
+	var key := InputEventKey.new()
+	key.physical_keycode = DEFAULT_TALK_KEY
+	InputMap.action_add_event(TALK_ACTION, key)
+
+
+## Whether the talk key is held right now. The action when it exists, else V.
+static func is_talk_held() -> bool:
+	if InputMap.has_action(TALK_ACTION):
+		return Input.is_action_pressed(TALK_ACTION)
+	return Input.is_physical_key_pressed(DEFAULT_TALK_KEY)
 
 
 func is_talking() -> bool:
@@ -317,6 +505,9 @@ func receive(bytes: PackedByteArray) -> bool:
 	frames_received += 1
 	bytes_received += bytes.size()
 
+	if not server_enabled:
+		return true
+
 	# The listener's own preference, applied before any work is done. Decoding audio
 	# nobody will hear is the one cost a local mute exists to avoid.
 	if local_mutes.has(packet.speaker):
@@ -397,7 +588,8 @@ func _ensure_speaker(speaker: int, codec_id: StringName) -> Dictionary:
 		if _playback_root == null:
 			_playback_root = playback_root_ref.resolve_or_null(self, CHANNEL)
 		var player := DotVoiceSinkPlayer.new(_playback_root, config.sample_rate)
-		player.positional = positional_playback
+		player.positional = positional_playback and speaker_position_fn.is_valid()
+		player.bus = playback_bus
 		player.max_distance = config.proximity_range
 		player.gain = config.output_gain
 		sink = player
@@ -443,6 +635,12 @@ func _pump_playback(delta: float) -> void:
 	if _speakers.is_empty():
 		return
 
+	if positional_playback and speaker_position_fn.is_valid():
+		for key in _speakers.keys():
+			var at: Variant = speaker_position_fn.call(int(key))
+			if at is Vector3:
+				set_speaker_position(int(key), at)
+
 	_accumulated_ms += delta * 1000.0
 
 	var guard := 0
@@ -486,6 +684,8 @@ func _pump_playback(delta: float) -> void:
 
 func describe() -> Dictionary:
 	return {
+		"server_enabled": server_enabled,
+		"open_mic": open_mic,
 		"capturing": _capturing,
 		"talking": is_talking(),
 		"speakers": _speakers.size(),
@@ -500,6 +700,8 @@ func describe() -> Dictionary:
 func describe_lines() -> PackedStringArray:
 	var out := PackedStringArray()
 
+	if not server_enabled:
+		out.append("voice     off on this server")
 	out.append("capture   %s%s" % [
 		"on" if _capturing else "off",
 		", talking" if is_talking() else ""

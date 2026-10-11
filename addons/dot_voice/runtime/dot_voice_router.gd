@@ -40,7 +40,19 @@ enum Channel {
 	CUSTOM = 3,
 }
 
-## A packet was refused. [param reason] is one of `muted`, `rate`, `unknown`, `format`.
+## The server's cvar that turns voice on and off: 1 relays, 0 relays nothing.
+const CVAR_ENABLE := "sv_voice_enable"
+
+## The server's cvar that decides how far speech carries, over whatever the game and the
+## client asked for: 0 the game's own choice, 1 everybody, 2 the speaker's team, 3 the
+## players within [member proximity_range]. See [member forced_channel].
+const CVAR_MODE := "sv_voice_mode"
+
+## [constant CVAR_MODE]'s values, in order. Index 0 is "the game decides".
+const MODES: Array[int] = [-1, Channel.ALL, Channel.TEAM, Channel.PROXIMITY]
+
+## A packet was refused. [param reason] is one of `muted`, `rate`, `unknown`, `format`,
+## `disabled`.
 signal speech_refused(speaker: int, reason: String)
 
 ## A packet was relayed to this many listeners.
@@ -48,8 +60,38 @@ signal speech_relayed(speaker: int, listeners: int)
 
 @export_group("Routing")
 
-## Channel used when a packet does not name one.
+## Whether anything is relayed at all. The operator's switch ([constant CVAR_ENABLE]).
+##
+## [b]Enforced here, not on the clients.[/b] A client told voice is off hides its key and
+## stops capturing, but a client is somebody else's program: a modified one keeps sending,
+## and the only place that can make "off" mean off is the one that would relay it. Off,
+## every packet is dropped before it is parsed, counted in [member refused_disabled], and
+## the speaker is not told, for the reason a muted one is not.
+@export var enabled: bool = true
+
+## A channel every packet is sent on regardless of the one it names, or -1 to honour the
+## packet's. The operator's [constant CVAR_MODE].
+##
+## [b]Why the server overrides the client's channel at all:[/b] the channel is a field the
+## client writes, so a game that wants team-only voice and trusts the packet has team-only
+## voice for every player who did not edit one byte. A proximity mode on a game with no
+## [member position_fn] reaches nobody, the same safe half a team channel without a
+## [member team_fn] takes.
+@export var forced_channel: int = -1
+
+## The channel every packet is relayed on: the game's choice (team voice, proximity voice).
+##
+## [b]Not "a packet that names none"[/b], which is what this used to say and how it behaved:
+## every packet names one (the client's [member DotVoiceManager.channel], ALL unless a host
+## changed it), so this was never read, and every game that chose team or proximity voice
+## relayed to everybody. The channel field is the client's to write, and a game's rule a
+## client can opt out of is not a rule. See [member honour_packet_channel].
 @export var default_channel: Channel = Channel.ALL
+
+## Use the channel each packet names instead of [member default_channel]. For a game that
+## gives players a key for "team" and one for "everybody"; the router still enforces what
+## each channel reaches, and [member forced_channel] still wins.
+@export var honour_packet_channel: bool = false
 
 ## Metres a proximity packet carries. Mirrors [member DotVoiceConfig.proximity_range].
 @export_range(0.0, 500.0, 1.0) var proximity_range: float = 40.0
@@ -104,6 +146,7 @@ var relayed_bytes: int = 0
 var refused_muted: int = 0
 var refused_rate: int = 0
 var refused_format: int = 0
+var refused_disabled: int = 0
 
 ## Peers that can hear and be heard, in the order they were added.
 var peers: PackedInt64Array = PackedInt64Array()
@@ -176,6 +219,11 @@ func is_muted(speaker: int) -> bool:
 ## [param from_peer] is the sender the transport reported, never anything the packet
 ## claimed. Returns how many listeners it went to, or a failure saying why not.
 func relay(from_peer: int, bytes: PackedByteArray) -> DotResult:
+	if not enabled:
+		refused_disabled += 1
+		speech_refused.emit(from_peer, "disabled")
+		return DotResult.success(0)
+
 	var max_samples := config.frame_samples() * 4 if config != null else 4096
 	var parsed := DotVoicePacket.from_bytes(bytes, max_samples)
 
@@ -190,6 +238,12 @@ func relay(from_peer: int, bytes: PackedByteArray) -> DotResult:
 	# discarded and replaced with who actually sent it. Without this any client can put
 	# words in any other player's mouth, and the only symptom is confusion.
 	packet.speaker = from_peer
+
+	# The server's channel, not the client's. See default_channel for the bug this was.
+	if forced_channel >= 0:
+		packet.channel = forced_channel
+	elif not honour_packet_channel:
+		packet.channel = default_channel
 
 	if config != null and packet.sample_count != config.frame_samples():
 		refused_format += 1
@@ -325,8 +379,99 @@ func _within_rate(peer: int, size: int) -> bool:
 	return used <= budget
 
 
+# --- Server settings -------------------------------------------------------
+
+## The cvars [method bind_cvars] registers, as data, for a host that registers them its own way.
+func cvar_specs() -> Array[Dictionary]:
+	var mode := maxi(MODES.find(forced_channel), 0)
+	var out: Array[Dictionary] = [
+		{
+			"name": CVAR_ENABLE,
+			"value": "1" if enabled else "0",
+			"description": "Voice chat: 1 on, 0 off. Off relays nothing, and clients hide the push-to-talk key",
+			"min": 0.0,
+			"max": 1.0,
+		},
+		{
+			"name": CVAR_MODE,
+			"value": str(mode),
+			"description": "Who hears a speaker: 0 the game decides, 1 everybody, 2 the speaker's team, 3 players nearby",
+			"min": 0.0,
+			"max": float(MODES.size() - 1),
+		},
+	]
+	return out
+
+
+## Registers [constant CVAR_ENABLE] and [constant CVAR_MODE] through [param add] and keeps
+## this router on them. [param add] is a server module's `add_cvar` (so they go when the
+## module unloads) or anything with its signature: `(name, default, description, flags) -> cvar`.
+##
+## [b]Pass dot-server's FLAG_REPLICATED in [param flags][/b]: clients learn the value through
+## their link ([method DotVoiceManager.follow_cvars]) and hide the key when voice is off.
+## Duck-typed, the shape dot-combat's `bind_cvars` has, because dot-server is not a
+## dependency of this addon. The value is read back after registering, because a cvar set
+## before this ran (argv, the deploy's content.yml) already holds the operator's choice.
+func bind_cvars(add: Callable, flags: int = 0) -> Array:
+	var made: Array = []
+
+	for spec in cvar_specs():
+		var cvar_name: String = spec["name"]
+		var made_cvar: Variant = add.call(cvar_name, String(spec["value"]), String(spec["description"]), flags)
+
+		if not (made_cvar is Object) or made_cvar == null:
+			continue
+
+		var cv := made_cvar as Object
+
+		if cv.has_method(&"with_range"):
+			cv.call(&"with_range", float(spec["min"]), float(spec["max"]))
+
+		if cv.has_signal(&"changed"):
+			cv.connect(&"changed", _on_cvar_changed.bind(cvar_name))
+
+		if cv.has_method(&"get_string"):
+			var _applied := set_cvar(cvar_name, String(cv.call(&"get_string")))
+
+		made.append(cv)
+
+	return made
+
+
+## Applies one of [method cvar_specs]' cvars by name. False for a name that is not this
+## router's or a value that is not a number.
+func set_cvar(cvar_name: String, value: String) -> bool:
+	var text := value.strip_edges()
+
+	if cvar_name != CVAR_ENABLE and cvar_name != CVAR_MODE:
+		return false
+
+	if not text.is_valid_float():
+		DotLog.warn(CHANNEL, "cvar is not a number; left as it was", {"cvar": cvar_name, "value": value})
+		return false
+
+	if cvar_name == CVAR_ENABLE:
+		var on := text.to_float() != 0.0
+		if on != enabled:
+			DotLog.info(CHANNEL, "voice chat %s" % ("on" if on else "off"))
+		enabled = on
+		return true
+
+	var index := clampi(roundi(text.to_float()), 0, MODES.size() - 1)
+	forced_channel = MODES[index]
+	DotLog.debug(CHANNEL, "voice mode set", {"mode": index, "channel": forced_channel})
+	return true
+
+
+func _on_cvar_changed(_old: String, new_value: String, cvar_name: String) -> void:
+	var _applied := set_cvar(cvar_name, new_value)
+
+
 func describe() -> Dictionary:
 	return {
+		"enabled": enabled,
+		"forced_channel": forced_channel,
+		"refused_disabled": refused_disabled,
 		"peers": peers.size(),
 		"relayed": relayed_packets,
 		"relayed_bytes": relayed_bytes,
@@ -339,11 +484,12 @@ func describe() -> Dictionary:
 
 func describe_lines() -> PackedStringArray:
 	var out := PackedStringArray()
+	out.append("voice     %s%s" % ["on" if enabled else "OFF", "" if forced_channel < 0 else ", channel %d forced" % forced_channel])
 	out.append("peers     %d" % peers.size())
 	out.append("relayed   %d packets, %s" % [
 		relayed_packets, DotPaths.format_bytes(relayed_bytes)
 	])
-	out.append("refused   %d muted, %d over rate, %d malformed" % [
-		refused_muted, refused_rate, refused_format
+	out.append("refused   %d muted, %d over rate, %d malformed, %d while off" % [
+		refused_muted, refused_rate, refused_format, refused_disabled
 	])
 	return out

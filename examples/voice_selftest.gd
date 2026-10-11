@@ -18,7 +18,7 @@ extends Node
 ## The one thing it cannot cover is the device layer itself, and that is said out loud
 ## rather than papered over: see the last section.
 
-const CHECKS := 103
+const CHECKS := 136
 
 var _passed := 0
 var _failed := 0
@@ -50,6 +50,9 @@ func _run() -> void:
 	_test_jitter_loss_and_overflow()
 	await _test_end_to_end()
 	await _test_router()
+	await _test_server_switch()
+	await _test_talk_key_opens_the_microphone()
+	await _test_over_a_real_socket()
 	_test_device_layer_is_not_covered()
 
 	print("")
@@ -781,6 +784,8 @@ func _test_router() -> void:
 	router.name = "Router"
 	router.config = config
 	router.max_bytes_per_second = 0
+	# These checks name each packet's channel; the game's own channel is the next section's.
+	router.honour_packet_channel = true
 	add_child(router)
 	await get_tree().process_frame
 
@@ -954,6 +959,388 @@ func _test_router() -> void:
 	_done()
 
 
+## A cvar as dot-server's DotConVar looks to [method DotVoiceRouter.bind_cvars]: a value,
+## a changed signal, a range. Duck-typed there, so a stand-in is the whole contract.
+class FakeCvar:
+	extends RefCounted
+	signal changed(old_value: String, new_value: String)
+	var value: String = ""
+	var low: float = 0.0
+	var high: float = 0.0
+	func get_string() -> String:
+		return value
+	func with_range(a: float, b: float) -> FakeCvar:
+		low = a
+		high = b
+		return self
+	func set_string(v: String) -> void:
+		var old := value
+		value = v
+		changed.emit(old, v)
+
+
+## A client link as dot-server's DotClientLink looks to [method DotVoiceManager.follow_cvars].
+class FakeLink:
+	extends RefCounted
+	signal replicated_cvar_changed(cvar_name: String, value: String)
+	var values: Dictionary = {}
+	func replicated_cvar(cvar_name: String, fallback: String = "") -> String:
+		return String(values.get(cvar_name, fallback))
+	func tell(cvar_name: String, value: String) -> void:
+		values[cvar_name] = value
+		replicated_cvar_changed.emit(cvar_name, value)
+
+
+func _test_server_switch() -> void:
+	_section("the server's switch, and the game's channel")
+
+	var config := _config()
+	var router := DotVoiceRouter.new()
+	router.name = "SwitchRouter"
+	router.config = config
+	router.max_bytes_per_second = 0
+	add_child(router)
+	await get_tree().process_frame
+
+	for peer in [1, 2, 3, 4]:
+		router.add_peer(peer)
+
+	var delivered: Array[int] = []
+	router.send_fn = func(peer: int, _bytes: PackedByteArray) -> void: delivered.append(peer)
+
+	var codec := DotVoiceCodec.instance_for(&"adpcm")
+	var packet := DotVoicePacket.new()
+	packet.sample_count = config.frame_samples()
+	packet.channel = DotVoiceRouter.Channel.ALL
+	packet.codec_id = &"adpcm"
+	packet.payload = codec.encode(DotVoiceSourceBuffer.tone(300.0, 0.02, config.sample_rate, 0.4))
+	var bytes := packet.to_bytes()
+
+	# The game chose team voice; the client's packet says ALL. Armed: before default_channel
+	# was read, this reached all three and every team game was everybody's.
+	router.default_channel = DotVoiceRouter.Channel.TEAM
+	router.team_fn = func(peer: int) -> int: return 0 if peer <= 2 else 1
+	var _r := router.relay(1, bytes)
+	_check(delivered == [2], "the game's channel wins over the one the packet names (%s)" % str(delivered),
+		"a rule the client writes the field for is not a rule")
+
+	# The operator's mode wins over the game's.
+	delivered.clear()
+	router.forced_channel = DotVoiceRouter.Channel.ALL
+	_r = router.relay(1, bytes)
+	_check(delivered.size() == 3, "a forced channel wins over the game's (%d)" % delivered.size())
+	router.forced_channel = -1
+
+	# Off relays nothing, quietly, and counts it. Armed by the same packet relaying with it on.
+	router.default_channel = DotVoiceRouter.Channel.ALL
+	delivered.clear()
+	router.enabled = false
+	var off := router.relay(1, bytes)
+	_check(delivered.is_empty(), "with voice off nothing is relayed (%d)" % delivered.size())
+	_check(off.ok and int(off.value) == 0 and router.refused_disabled == 1,
+		"and the speaker is not told, but it is counted (%d)" % router.refused_disabled)
+	router.enabled = true
+	_r = router.relay(1, bytes)
+	_check(delivered.size() == 3, "on again, the same packet reaches everybody (%d)" % delivered.size())
+
+	# The cvars, through a module's add_cvar.
+	var made := {}
+	var add := func(n: String, v: String, _d: String, _f: int) -> Object:
+		var c := FakeCvar.new()
+		c.value = v
+		made[n] = c
+		return c
+	var cvars := router.bind_cvars(add, 0)
+	_check(cvars.size() == 2 and made.has(DotVoiceRouter.CVAR_ENABLE) and made.has(DotVoiceRouter.CVAR_MODE),
+		"bind_cvars registers sv_voice_enable and sv_voice_mode (%s)" % str(made.keys()))
+	var enable: FakeCvar = made.get(DotVoiceRouter.CVAR_ENABLE)
+	var mode: FakeCvar = made.get(DotVoiceRouter.CVAR_MODE)
+	_check(enable != null and enable.value == "1" and enable.high == 1.0, "sv_voice_enable defaults to 1, range 0..1")
+	enable.set_string("0")
+	delivered.clear()
+	_r = router.relay(1, bytes)
+	_check(not router.enabled and delivered.is_empty(), "sv_voice_enable 0 turns relaying off")
+	enable.set_string("1")
+	_r = router.relay(1, bytes)
+	_check(router.enabled and delivered.size() == 3, "and 1 turns it back on (%d)" % delivered.size())
+	mode.set_string("2")
+	_check(router.forced_channel == DotVoiceRouter.Channel.TEAM, "sv_voice_mode 2 forces team voice")
+	mode.set_string("0")
+	_check(router.forced_channel == -1, "and 0 hands it back to the game")
+	_check(not router.set_cvar(DotVoiceRouter.CVAR_ENABLE, "yes") and router.enabled,
+		"a value that is not a number is refused and changes nothing")
+
+	# A value set before the router bound (argv, content.yml) is the one it starts on.
+	var early := DotVoiceRouter.new()
+	early.config = config
+	var preset := func(n: String, _v: String, _d: String, _f: int) -> Object:
+		var c := FakeCvar.new()
+		c.value = "0" if n == DotVoiceRouter.CVAR_ENABLE else "0"
+		return c
+	var _made_early := early.bind_cvars(preset, 0)
+	_check(not early.enabled, "a value the operator set before binding is read back")
+	early.free()
+
+	# The client's half: the link says off, the manager stops.
+	var listener := DotVoiceManager.new()
+	listener.name = "SwitchListener"
+	listener.config = config
+	listener.config_file = ""
+	listener.register_service = false
+	var heard := DotVoiceSinkBuffer.new()
+	heard.sample_rate = config.sample_rate
+	listener.sink_factory = func(_speaker: int) -> DotVoiceSink: return heard
+	add_child(listener)
+	await get_tree().process_frame
+
+	var told: Array[bool] = []
+	listener.server_enabled_changed.connect(func(on: bool) -> void: told.append(on))
+	var link := FakeLink.new()
+	link.values[DotVoiceRouter.CVAR_ENABLE] = "0"
+	_check(listener.follow_cvars(link), "a manager follows a link that replicates cvars")
+	_check(not listener.server_enabled and told == [false], "and takes the value the link already holds (%s)" % str(told))
+
+	var mic := DotVoiceSourceBuffer.new()
+	mic.sample_rate = config.sample_rate
+	listener.source = mic
+	var _t := listener.update_talk(true)
+	_check(not listener.is_capturing(), "with voice off the talk key opens no microphone")
+	_t = listener.update_talk(false)
+
+	packet.speaker = 9
+	var _played := listener.receive(packet.to_bytes())
+	for _i in range(10):
+		await get_tree().process_frame
+	_check(heard.frames_written == 0, "and what arrives anyway is not played (%d)" % heard.frames_written)
+
+	link.tell(DotVoiceRouter.CVAR_ENABLE, "1")
+	_check(listener.server_enabled and told == [false, true], "the server turning it on reaches the manager (%s)" % str(told))
+	_check(not listener.follow_cvars(RefCounted.new()),
+		"a source that cannot replicate is refused, and voice stays as it was")
+
+	listener.queue_free()
+	router.queue_free()
+	await get_tree().process_frame
+	_done()
+
+
+func _test_talk_key_opens_the_microphone() -> void:
+	_section("the first press of the talk key is where the microphone opens")
+
+	var config := _config()
+	var talker := DotVoiceManager.new()
+	talker.name = "Presser"
+	talker.config = config
+	talker.config_file = ""
+	talker.register_service = false
+	var mic := DotVoiceSourceBuffer.new()
+	mic.sample_rate = config.sample_rate
+	mic.loop = true
+	mic.write(DotVoiceSourceBuffer.tone(440.0, 0.2, config.sample_rate, 0.4))
+	talker.source = mic
+	var sent: Array[int] = []
+	talker.send_fn = func(b: PackedByteArray) -> void: sent.append(b.size())
+	add_child(talker)
+	for _i in range(5):
+		await get_tree().process_frame
+
+	_check(not talker.is_capturing() and not mic.is_running(),
+		"nothing is captured before the key is pressed",
+		"a browser asks for the microphone the moment a page opens it")
+
+	var pressed := talker.update_talk(true)
+	_check(pressed.ok and talker.is_capturing(), "the first press opens it")
+	for _i in range(10):
+		await get_tree().process_frame
+	_check(sent.size() > 0, "and speech goes out while it is held (%d frames)" % sent.size())
+
+	var _t := talker.update_talk(false)
+	for _i in range(3):
+		await get_tree().process_frame
+	var before := sent.size()
+	for _i in range(10):
+		await get_tree().process_frame
+	_check(sent.size() == before, "released, nothing more goes (%d new)" % (sent.size() - before))
+
+	# Open mic: the gate opens on level, and the press already happened.
+	talker.set_open_mic(true)
+	for _i in range(10):
+		await get_tree().process_frame
+	_check(sent.size() > before and talker.open_mic, "open mic sends with no key held (%d new)" % (sent.size() - before))
+	talker.set_open_mic(false)
+
+	# A refusal is returned once a press, not every frame.
+	var nothing := DotVoiceManager.new()
+	nothing.name = "NoMic"
+	nothing.config = _config()
+	nothing.config_file = ""
+	nothing.register_service = false
+	add_child(nothing)
+	await get_tree().process_frame
+	var first := nothing.update_talk(true)
+	var second := nothing.update_talk(true)
+	_check(not first.ok and second.ok and not nothing.is_capturing(),
+		"no microphone: the first frame of a press says why, the rest of it is quiet",
+		str(first.error) if not first.ok else "first press succeeded")
+
+	talker.queue_free()
+	nothing.queue_free()
+	await get_tree().process_frame
+	_done()
+
+
+## Two clients and a router over real WebSockets on 127.0.0.1, the wire a browser uses.
+##
+## [b]Why a socket here[/b] when every other section hands bytes across a Callable: the
+## speaker-id bug ([url=docs/history.md]history[/url]) was found by the first test that put
+## a frame on a real socket and asked the listener who was talking. This section is that,
+## kept: full-width peer ids, a frame that leaves one process-level peer and plays at another,
+## and the server's switch, armed both ways.
+func _test_over_a_real_socket() -> void:
+	_section("two clients over a real socket hear each other")
+
+	var config := _config()
+	var server := TCPServer.new()
+	var port := 0
+	for candidate in range(47_310, 47_330):
+		if server.listen(candidate, "127.0.0.1") == OK:
+			port = candidate
+			break
+	if not _check(port != 0, "a WebSocket port is free on 127.0.0.1"):
+		_done()
+		return
+
+	var router := DotVoiceRouter.new()
+	router.name = "SocketRouter"
+	router.config = config
+	# A looping buffer source runs faster than real time; the rate limit is another section's.
+	router.max_bytes_per_second = 0
+	add_child(router)
+
+	# Server side: peer id -> WebSocketPeer. Ids full width, the way Godot hands them out.
+	var ids: Array[int] = [1_900_000_001, 2_000_000_002]
+	var server_peers: Dictionary = {}
+	router.send_fn = func(peer: int, bytes: PackedByteArray) -> void:
+		var ws: WebSocketPeer = server_peers.get(peer)
+		if ws != null and ws.get_ready_state() == WebSocketPeer.STATE_OPEN:
+			var _e := ws.send(bytes)
+
+	var clients: Array[WebSocketPeer] = []
+	for _i in range(2):
+		var c := WebSocketPeer.new()
+		var _e := c.connect_to_url("ws://127.0.0.1:%d" % port)
+		clients.append(c)
+
+	var pending: Array[WebSocketPeer] = []
+	var deadline := Time.get_ticks_msec() + 5000
+	while Time.get_ticks_msec() < deadline:
+		while server.is_connection_available():
+			var ws := WebSocketPeer.new()
+			var _e := ws.accept_stream(server.take_connection())
+			pending.append(ws)
+		for ws in pending:
+			ws.poll()
+		for c in clients:
+			c.poll()
+		var open := 0
+		for c in clients:
+			if c.get_ready_state() == WebSocketPeer.STATE_OPEN:
+				open += 1
+		var accepted := 0
+		for ws in pending:
+			if ws.get_ready_state() == WebSocketPeer.STATE_OPEN:
+				accepted += 1
+		if open == 2 and accepted == 2:
+			break
+		await get_tree().process_frame
+
+	# Accept order is connect order on one loopback, but the test does not lean on it: the
+	# first frame each sends says who it is.
+	if not _check(pending.size() == 2, "both clients connect (%d)" % pending.size()):
+		router.queue_free()
+		server.stop()
+		_done()
+		return
+	for i in range(2):
+		server_peers[ids[i]] = pending[i]
+		router.add_peer(ids[i])
+
+	var talker := DotVoiceManager.new()
+	talker.name = "SocketTalker"
+	talker.config = config
+	talker.config_file = ""
+	talker.register_service = false
+	var mic := DotVoiceSourceBuffer.new()
+	mic.sample_rate = config.sample_rate
+	mic.loop = true
+	mic.write(DotVoiceSourceBuffer.tone(440.0, 0.2, config.sample_rate, 0.4))
+	talker.source = mic
+	talker.send_fn = func(b: PackedByteArray) -> void: var _e := clients[0].send(b)
+	add_child(talker)
+
+	var listener := DotVoiceManager.new()
+	listener.name = "SocketListener"
+	listener.config = config
+	listener.config_file = ""
+	listener.register_service = false
+	var heard := DotVoiceSinkBuffer.new()
+	heard.sample_rate = config.sample_rate
+	var speakers: Array[int] = []
+	listener.sink_factory = func(speaker: int) -> DotVoiceSink:
+		speakers.append(speaker)
+		return heard
+	add_child(listener)
+	await get_tree().process_frame
+
+	# One frame of the loop: poll every socket, relay what the server got, play what B got.
+	var pump := func(frames: int) -> void:
+		for _f in range(frames):
+			for c in clients:
+				c.poll()
+			for id in server_peers:
+				var ws: WebSocketPeer = server_peers[id]
+				ws.poll()
+				while ws.get_available_packet_count() > 0:
+					var _r := router.relay(int(id), ws.get_packet())
+			clients[1].poll()
+			while clients[1].get_available_packet_count() > 0:
+				var _p := listener.receive(clients[1].get_packet())
+			while clients[0].get_available_packet_count() > 0:
+				var _drop := clients[0].get_packet()
+			await get_tree().process_frame
+
+	var _t := talker.update_talk(true)
+	await pump.call(40)
+
+	_check(talker.frames_sent > 10, "the talker sends frames (%d)" % talker.frames_sent)
+	_check(listener.frames_received > 10, "the other client receives them over the socket (%d)" % listener.frames_received)
+	_check(speakers == [ids[0]], "as the full-width id of who spoke (%s)" % str(speakers))
+	_check(heard.rms() > 0.1, "and plays the tone, not silence (%.3f rms)" % heard.rms())
+
+	# The operator turns it off mid-sentence. Armed by the frames above.
+	var during := listener.frames_received
+	router.enabled = false
+	await pump.call(15)
+	var leaked := listener.frames_received - during
+	_check(leaked <= 2, "sv_voice_enable 0: nothing more arrives (%d in flight)" % leaked)
+	router.enabled = true
+	during = listener.frames_received
+	await pump.call(20)
+	_check(listener.frames_received - during > 5, "and 1: speech arrives again (%d)" % (listener.frames_received - during))
+
+	_t = talker.update_talk(false)
+	for c in clients:
+		c.close()
+	for id in server_peers:
+		(server_peers[id] as WebSocketPeer).close()
+	server.stop()
+	talker.queue_free()
+	listener.queue_free()
+	router.queue_free()
+	await get_tree().process_frame
+	_done()
+
+
 ## The honest gap, named rather than left for somebody to discover.
 ##
 ## [b]Everything above runs with no audio device in the process.[/b] That is deliberate
@@ -981,6 +1368,6 @@ func _test_device_layer_is_not_covered() -> void:
 	)
 
 	print("  note  DotVoiceSourceMicrophone and DotVoiceSinkPlayer are NOT covered here.")
-	print("        They need an audio device. Run examples/voice_loopback.tscn on a")
-	print("        machine with a headset before trusting either.")
+	print("        They need an audio device: tools/voice_device_probe.sh runs both under")
+	print("        Xvfb on a real ALSA device, with a tone played into the capture bus.")
 	_done()

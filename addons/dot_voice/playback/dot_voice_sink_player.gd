@@ -29,6 +29,10 @@ var max_distance: float = 40.0
 
 var gain: float = 1.0
 
+## The bus the voice plays on. Missing at [method start] falls back to the default bus, so a
+## project with no voice bus still hears its players.
+var bus: StringName = &"Master"
+
 ## Where the player node is parented.
 var host: Node = null
 
@@ -68,6 +72,9 @@ func start() -> DotResult:
 		var player := AudioStreamPlayer.new()
 		player.stream = generator
 		_player = player
+
+	if AudioServer.get_bus_index(bus) >= 0:
+		_player.set(&"bus", bus)
 
 	_player.name = "DotVoicePlayback"
 	host.add_child(_player)
@@ -140,6 +147,7 @@ func describe() -> Dictionary:
 		"sink": "player",
 		"running": _running,
 		"positional": positional,
+		"bus": String(bus),
 		"available": _playback.get_frames_available() if _playback != null else 0,
 		"skips": _playback.get_skips() if _playback != null else 0,
 	}

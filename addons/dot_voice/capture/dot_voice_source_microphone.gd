@@ -47,6 +47,14 @@ var _spill: PackedFloat32Array = PackedFloat32Array()
 ## Where the player node is parented. The source does not own a tree position.
 var host: Node = null
 
+## A stream played into the capture bus instead of the microphone. Null is the microphone.
+##
+## For a device probe: everything after the driver's input (the capture effect, the mix
+## rate, the resampling, the encoder) runs exactly as for a person, on a machine whose audio
+## driver has no input at all (the Linux ALSA driver has none; only PulseAudio's does). Not
+## for a game: a bot speaks through [DotVoiceSourceBuffer].
+var input_stream: AudioStream = null
+
 
 func _init(p_host: Node = null, p_sample_rate: int = 24000) -> void:
 	host = p_host
@@ -147,7 +155,7 @@ func start() -> DotResult:
 
 	_player = AudioStreamPlayer.new()
 	_player.name = "DotVoiceMicrophone"
-	_player.stream = AudioStreamMicrophone.new()
+	_player.stream = input_stream if input_stream != null else AudioStreamMicrophone.new()
 	_player.bus = bus_name
 	host.add_child(_player)
 	_player.play()
