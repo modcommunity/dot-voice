@@ -51,6 +51,18 @@ const CVAR_MODE := "sv_voice_mode"
 ## [constant CVAR_MODE]'s values, in order. Index 0 is "the game decides".
 const MODES: Array[int] = [-1, Channel.ALL, Channel.TEAM, Channel.PROXIMITY]
 
+## Proximity cvars. Range in metres; minimum distance is the radius inside which a voice is
+## at full volume; falloff is a [enum DotVoiceProximity.Falloff]; occlusion makes a wall
+## between two players quieter ([member occlusion_gain]); the bypasses let a team or global
+## channel ignore proximity (only meaningful with [member honour_packet_channel]).
+const CVAR_PROX_RANGE := "sv_voice_proximity_range"
+const CVAR_PROX_MIN := "sv_voice_proximity_min"
+const CVAR_PROX_FALLOFF := "sv_voice_proximity_falloff"
+const CVAR_PROX_OCCLUSION := "sv_voice_proximity_occlusion"
+const CVAR_PROX_OCCLUSION_GAIN := "sv_voice_proximity_occlusion_gain"
+const CVAR_PROX_TEAM_BYPASS := "sv_voice_proximity_team_bypass"
+const CVAR_PROX_GLOBAL_BYPASS := "sv_voice_proximity_global_bypass"
+
 ## A packet was refused. [param reason] is one of `muted`, `rate`, `unknown`, `format`,
 ## `disabled`.
 signal speech_refused(speaker: int, reason: String)
@@ -96,6 +108,29 @@ signal speech_relayed(speaker: int, listeners: int)
 ## Metres a proximity packet carries. Mirrors [member DotVoiceConfig.proximity_range].
 @export_range(0.0, 500.0, 1.0) var proximity_range: float = 40.0
 
+@export_group("Proximity")
+
+## Metres inside which a proximity voice is at full volume.
+@export_range(0.0, 100.0, 0.5) var proximity_min_distance: float = 2.0
+
+## How loudness falls between the minimum distance and [member proximity_range].
+@export var proximity_falloff: DotVoiceProximity.Falloff = DotVoiceProximity.Falloff.INVERSE
+
+## Whether [member occlusion_fn] is asked. Off by default: it is a ray per listener in range.
+@export var proximity_occlusion: bool = false
+
+## What an occluded voice is multiplied by. 0 is a wall that blocks speech entirely.
+@export_range(0.0, 1.0, 0.05) var occlusion_gain: float = 0.35
+
+## Whether a packet on the team channel is exempt from proximity (team radio). Only
+## reachable with [member honour_packet_channel] and proximity as [member default_channel].
+@export var team_bypasses_proximity: bool = true
+
+## Whether a packet on the everybody channel is exempt from proximity (a global shout key).
+## Off: with proximity as the game's mode, the everybody channel is proximity too, which is
+## what a client that never chose a channel (it sends ALL) must get.
+@export var global_bypasses_proximity: bool = false
+
 @export_group("Limits")
 
 ## Bytes per second one speaker may put on the wire. 0 disables the limit.
@@ -139,6 +174,15 @@ var can_hear_fn: Callable = Callable()
 
 ## Returns the listeners a [constant Channel.CUSTOM] packet goes to. Optional.
 var listener_filter: Callable = Callable()
+
+## Whether a wall is between two points, for [member proximity_occlusion]:
+## [code]func(listener_at: Vector3, speaker_at: Vector3) -> bool[/code]. Cheaper and softer
+## than [member can_hear_fn], which is all-or-nothing: this one only turns the voice down.
+## [method DotVoiceProximity.ray_occluder] makes one.
+var occlusion_fn: Callable = Callable()
+
+## listener -> gain for the packet being relayed. Rebuilt per packet; empty means full.
+var _gains: Dictionary = {}
 
 ## Diagnostics.
 var relayed_packets: int = 0
@@ -238,12 +282,22 @@ func relay(from_peer: int, bytes: PackedByteArray) -> DotResult:
 	# discarded and replaced with who actually sent it. Without this any client can put
 	# words in any other player's mouth, and the only symptom is confusion.
 	packet.speaker = from_peer
+	# The gain is the server's to set. A client's own packet carrying gain bits would
+	# otherwise be relayed with them, letting a talker choose how loud they are to others.
+	packet.gain = 1.0
+	_gains.clear()
 
 	# The server's channel, not the client's. See default_channel for the bug this was.
 	if forced_channel >= 0:
 		packet.channel = forced_channel
 	elif not honour_packet_channel:
 		packet.channel = default_channel
+
+	# Proximity is the game's mode, and a team or global channel may opt out of it.
+	if forced_channel < 0 and default_channel == Channel.PROXIMITY and honour_packet_channel:
+		if (packet.channel == Channel.TEAM and not team_bypasses_proximity) \
+				or (packet.channel == Channel.ALL and not global_bypasses_proximity):
+			packet.channel = Channel.PROXIMITY
 
 	if config != null and packet.sample_count != config.frame_samples():
 		refused_format += 1
@@ -281,8 +335,16 @@ func relay(from_peer: int, bytes: PackedByteArray) -> DotResult:
 	var payload := packet.to_bytes()
 
 	if send_fn.is_valid():
+		var flags_at := DotVoicePacket.OFFSET_FLAGS
 		for listener in listeners:
-			send_fn.call(int(listener), payload)
+			var gain: float = float(_gains.get(int(listener), 1.0))
+			if gain >= 1.0:
+				send_fn.call(int(listener), payload)
+			else:
+				# Patched in a copy rather than re-encoding the frame per listener.
+				var quiet := payload.duplicate()
+				quiet.encode_u8(flags_at, quiet.decode_u8(flags_at) | DotVoicePacket.gain_bits(gain))
+				send_fn.call(int(listener), quiet)
 
 	relayed_packets += 1
 	relayed_bytes += payload.size() * listeners.size()
@@ -332,6 +394,7 @@ func _listeners_for(packet: DotVoicePacket) -> PackedInt64Array:
 				return out
 
 			var range_squared := proximity_range * proximity_range
+			var ask_occlusion := proximity_occlusion and occlusion_fn.is_valid()
 
 			for peer in peers:
 				if int(peer) == packet.speaker:
@@ -347,6 +410,17 @@ func _listeners_for(packet: DotVoicePacket) -> PackedInt64Array:
 					can_hear_fn.call(int(peer), packet.speaker, at, origin)
 				):
 					continue
+				var level := DotVoiceProximity.gain(
+					(at as Vector3).distance_to(origin as Vector3), proximity_range,
+					proximity_min_distance, proximity_falloff
+				)
+				if ask_occlusion and bool(occlusion_fn.call(at, origin)):
+					level *= occlusion_gain
+				# Silent after falloff or a wall: not sent, which is the bandwidth saving.
+				if level <= 0.0:
+					continue
+				if level < 1.0:
+					_gains[int(peer)] = level
 				out.append(peer)
 			return out
 
@@ -399,6 +473,41 @@ func cvar_specs() -> Array[Dictionary]:
 			"min": 0.0,
 			"max": float(MODES.size() - 1),
 		},
+		{
+			"name": CVAR_PROX_RANGE, "value": str(proximity_range),
+			"description": "Proximity voice: metres a voice carries",
+			"min": 1.0, "max": 500.0,
+		},
+		{
+			"name": CVAR_PROX_MIN, "value": str(proximity_min_distance),
+			"description": "Proximity voice: metres inside which a voice is at full volume",
+			"min": 0.0, "max": 100.0,
+		},
+		{
+			"name": CVAR_PROX_FALLOFF, "value": str(int(proximity_falloff)),
+			"description": "Proximity voice falloff: 0 linear, 1 inverse distance, 2 quadratic",
+			"min": 0.0, "max": 2.0,
+		},
+		{
+			"name": CVAR_PROX_OCCLUSION, "value": "1" if proximity_occlusion else "0",
+			"description": "Proximity voice: 1 turns a voice down through walls (needs the game's occlusion_fn)",
+			"min": 0.0, "max": 1.0,
+		},
+		{
+			"name": CVAR_PROX_OCCLUSION_GAIN, "value": str(occlusion_gain),
+			"description": "Proximity voice: volume through a wall, 0 silent to 1 unchanged",
+			"min": 0.0, "max": 1.0,
+		},
+		{
+			"name": CVAR_PROX_TEAM_BYPASS, "value": "1" if team_bypasses_proximity else "0",
+			"description": "Proximity voice: 1 lets the team channel ignore distance",
+			"min": 0.0, "max": 1.0,
+		},
+		{
+			"name": CVAR_PROX_GLOBAL_BYPASS, "value": "1" if global_bypasses_proximity else "0",
+			"description": "Proximity voice: 1 lets the everybody channel ignore distance",
+			"min": 0.0, "max": 1.0,
+		},
 	]
 	return out
 
@@ -443,7 +552,12 @@ func bind_cvars(add: Callable, flags: int = 0) -> Array:
 func set_cvar(cvar_name: String, value: String) -> bool:
 	var text := value.strip_edges()
 
-	if cvar_name != CVAR_ENABLE and cvar_name != CVAR_MODE:
+	var known := [
+		CVAR_ENABLE, CVAR_MODE, CVAR_PROX_RANGE, CVAR_PROX_MIN, CVAR_PROX_FALLOFF,
+		CVAR_PROX_OCCLUSION, CVAR_PROX_OCCLUSION_GAIN, CVAR_PROX_TEAM_BYPASS,
+		CVAR_PROX_GLOBAL_BYPASS,
+	]
+	if not known.has(cvar_name):
 		return false
 
 	if not text.is_valid_float():
@@ -457,7 +571,31 @@ func set_cvar(cvar_name: String, value: String) -> bool:
 		enabled = on
 		return true
 
-	var index := clampi(roundi(text.to_float()), 0, MODES.size() - 1)
+	var number := text.to_float()
+	match cvar_name:
+		CVAR_PROX_RANGE:
+			proximity_range = clampf(number, 1.0, 500.0)
+			return true
+		CVAR_PROX_MIN:
+			proximity_min_distance = clampf(number, 0.0, 100.0)
+			return true
+		CVAR_PROX_FALLOFF:
+			proximity_falloff = clampi(roundi(number), 0, 2) as DotVoiceProximity.Falloff
+			return true
+		CVAR_PROX_OCCLUSION:
+			proximity_occlusion = number != 0.0
+			return true
+		CVAR_PROX_OCCLUSION_GAIN:
+			occlusion_gain = clampf(number, 0.0, 1.0)
+			return true
+		CVAR_PROX_TEAM_BYPASS:
+			team_bypasses_proximity = number != 0.0
+			return true
+		CVAR_PROX_GLOBAL_BYPASS:
+			global_bypasses_proximity = number != 0.0
+			return true
+
+	var index := clampi(roundi(number), 0, MODES.size() - 1)
 	forced_channel = MODES[index]
 	DotLog.debug(CHANNEL, "voice mode set", {"mode": index, "channel": forced_channel})
 	return true

@@ -107,3 +107,9 @@ A client asking another client not to play a muted player is not muting anybody,
 - **A transport.** `send_fn` takes bytes.
 - **A voice UI.** The signals a HUD needs are there.
 - **Recording to disk.** A `DotVoiceSink` subclass is four methods.
+
+## Proximity and gagging
+
+The router computes a gain per listener (`DotVoiceProximity.gain`: full inside `sv_voice_proximity_min`, zero at `sv_voice_proximity_range`, linear, inverse or quadratic between) and sends a packet only to listeners above zero, which is the bandwidth saving. The gain rides in bits 1..7 of the flags byte, so the wire version is unchanged and an older client plays at full volume. A wall between two players multiplies it by `sv_voice_proximity_occlusion_gain` when `sv_voice_proximity_occlusion` is on and the game set `occlusion_fn` (`DotVoiceProximity.ray_occluder` is one ray per listener in range). With `honour_packet_channel` and proximity as the game's mode, the team and everybody channels are exempt only when their bypass cvar says so.
+
+`DotVoiceLookMute` is the client half: the host gives it `target_fn` (who is looked at; `pick_by_angle` is a ready one), a tap on `voice_gag` gags, a second tap inside `double_tap_ms` reverts the gag and toggles a mute (voice, plus chat through `chat_mute_fn`), or `separate_keys` gives each its own action. The server only says whether it is allowed and whether everybody starts gagged. Playback positional attenuation of the engine's player stacks with the server gain; a game using both should leave `positional_playback` for panning only.

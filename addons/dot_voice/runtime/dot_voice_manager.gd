@@ -128,6 +128,16 @@ var playback_bus: StringName = VOICE_BUS
 ## because a mute a client applies to itself is one the muted player can simply not apply.
 var local_mutes: Dictionary = {}
 
+## Speakers this client has gagged: it stops hearing them, and nothing else changes.
+## Separate from [member local_mutes] so a gag toggled by looking cannot undo a mute the
+## player made with `sm`, and the reverse. See [DotVoiceLookMute].
+var gagged: Dictionary = {}
+
+## Every speaker starts gagged until the listener un-gags them. The server's
+## `sv_voice_gag_default`; a listener's own un-gag is remembered in [member ungagged].
+var gag_default: bool = false
+var ungagged: Dictionary = {}
+
 ## The gate. Exposed so a HUD can read its level for a meter.
 var gate: DotVoiceGate = null
 
@@ -531,13 +541,18 @@ func receive(bytes: PackedByteArray) -> bool:
 
 	# The listener's own preference, applied before any work is done. Decoding audio
 	# nobody will hear is the one cost a local mute exists to avoid.
-	if local_mutes.has(packet.speaker):
+	if local_mutes.has(packet.speaker) or is_gagged(packet.speaker):
 		return true
 
 	var speaker := _ensure_speaker(packet.speaker, packet.codec_id)
 
 	if speaker.is_empty():
 		return false
+
+	# The server's loudness for this listener. Held per speaker and applied when the frame
+	# plays, so frames already queued in the jitter buffer keep playing at the gain they
+	# were sent with rather than the one of the latest packet; one frame of lag at 20 ms.
+	speaker["gain"] = packet.gain
 
 	(speaker["jitter"] as DotVoiceJitter).push(packet)
 	return true
@@ -553,6 +568,22 @@ func set_local_mute(speaker: int, muted: bool) -> void:
 			(_speakers[speaker]["jitter"] as DotVoiceJitter).reset()
 	else:
 		local_mutes.erase(speaker)
+
+
+## Stops (or resumes) hearing a speaker, on this machine only. See [member gagged].
+func set_gag(speaker: int, on: bool) -> void:
+	if on:
+		gagged[speaker] = true
+		ungagged.erase(speaker)
+		if _speakers.has(speaker):
+			(_speakers[speaker]["jitter"] as DotVoiceJitter).reset()
+	else:
+		gagged.erase(speaker)
+		ungagged[speaker] = true
+
+
+func is_gagged(speaker: int) -> bool:
+	return gagged.has(speaker) or (gag_default and not ungagged.has(speaker))
 
 
 func is_locally_muted(speaker: int) -> bool:
@@ -632,6 +663,13 @@ func _ensure_speaker(speaker: int, codec_id: StringName) -> Dictionary:
 	return _speakers[speaker]
 
 
+static func _scaled(frame: PackedFloat32Array, gain: float) -> PackedFloat32Array:
+	var out := frame.duplicate()
+	for i in range(out.size()):
+		out[i] *= gain
+	return out
+
+
 func _destroy_speaker(speaker: int) -> void:
 	if not _speakers.has(speaker):
 		return
@@ -695,7 +733,8 @@ func _pump_playback(delta: float) -> void:
 				entry["speaking"] = true
 				speaker_changed.emit(speaker, true)
 
-			sink.write_frame(frame)
+			sink.write_frame(frame if is_equal_approx(float(entry.get("gain", 1.0)), 1.0) \
+				else _scaled(frame, float(entry["gain"])))
 
 	# A client that stalled for a second should not then play a second of audio as fast
 	# as it can. Anything beyond the guard is time nobody gets back.

@@ -98,6 +98,23 @@ var starts_talk_spurt: bool = false
 
 const FLAG_START := 1 << 0
 
+## Bits 1..7 of the flags byte carry the listener's gain, 0..127. [b]Not a new field, so
+## the version stays 2[/b]: a build that predates it masks the flags with FLAG_START and
+## plays at full volume. 0 means "unattenuated", which is also what a client's own
+## packet carries, so nothing that never heard of gain changes.
+const GAIN_SHIFT := 1
+const GAIN_STEPS := 127
+
+## Loudness the server wants this listener to hear this frame at, 0..1. 1.0 is full.
+var gain: float = 1.0
+
+
+## The flags byte value for a gain, to patch into a copy of an encoded packet per listener.
+static func gain_bits(g: float) -> int:
+	if g >= 1.0:
+		return 0
+	return clampi(roundi(g * GAIN_STEPS), 1, GAIN_STEPS) << GAIN_SHIFT
+
 
 func to_bytes() -> PackedByteArray:
 	var out := PackedByteArray()
@@ -109,7 +126,7 @@ func to_bytes() -> PackedByteArray:
 	out.resize(HEADER_BYTES + (1 + name_bytes.size() if extended else 0) + payload.size())
 
 	out.encode_u8(OFFSET_VERSION, VERSION)
-	out.encode_u8(OFFSET_FLAGS, FLAG_START if starts_talk_spurt else 0)
+	out.encode_u8(OFFSET_FLAGS, (FLAG_START if starts_talk_spurt else 0) | gain_bits(gain))
 	# [b]32 bits, because a Godot peer id is a 31-bit random number.[/b] See the note on
 	# [constant VERSION]. `& 0xFFFFFFFF` rather than a bare assignment so a host that
 	# passes something larger — an occupant id, a database row — truncates predictably
@@ -160,6 +177,8 @@ static func from_bytes(bytes: PackedByteArray, max_samples: int = 4096) -> DotRe
 	var packet := DotVoicePacket.new()
 	var flags := bytes.decode_u8(OFFSET_FLAGS)
 	packet.starts_talk_spurt = (flags & FLAG_START) != 0
+	var steps := flags >> GAIN_SHIFT
+	packet.gain = 1.0 if steps == 0 else float(steps) / float(GAIN_STEPS)
 	packet.speaker = bytes.decode_u32(OFFSET_SPEAKER)
 	packet.sequence = bytes.decode_u16(OFFSET_SEQUENCE)
 	packet.sample_count = bytes.decode_u16(OFFSET_SAMPLE_COUNT)

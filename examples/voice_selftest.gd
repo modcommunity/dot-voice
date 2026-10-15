@@ -18,7 +18,7 @@ extends Node
 ## The one thing it cannot cover is the device layer itself, and that is said out loud
 ## rather than papered over: see the last section.
 
-const CHECKS := 138
+const CHECKS := 189
 
 var _passed := 0
 var _failed := 0
@@ -53,6 +53,9 @@ func _run() -> void:
 	await _test_server_switch()
 	await _test_talk_key_opens_the_microphone()
 	await _test_over_a_real_socket()
+	_test_proximity_math()
+	await _test_proximity_two_clients()
+	_test_look_mute()
 	_test_device_layer_is_not_covered()
 
 	print("")
@@ -1051,8 +1054,8 @@ func _test_server_switch() -> void:
 		made[n] = c
 		return c
 	var cvars := router.bind_cvars(add, 0)
-	_check(cvars.size() == 2 and made.has(DotVoiceRouter.CVAR_ENABLE) and made.has(DotVoiceRouter.CVAR_MODE),
-		"bind_cvars registers sv_voice_enable and sv_voice_mode (%s)" % str(made.keys()))
+	_check(cvars.size() == router.cvar_specs().size() and made.has(DotVoiceRouter.CVAR_ENABLE) and made.has(DotVoiceRouter.CVAR_MODE),
+		"bind_cvars registers sv_voice_enable, sv_voice_mode and the proximity cvars (%s)" % str(made.keys()))
 	var enable: FakeCvar = made.get(DotVoiceRouter.CVAR_ENABLE)
 	var mode: FakeCvar = made.get(DotVoiceRouter.CVAR_MODE)
 	_check(enable != null and enable.value == "1" and enable.high == 1.0, "sv_voice_enable defaults to 1, range 0..1")
@@ -1354,6 +1357,295 @@ func _test_over_a_real_socket() -> void:
 	listener.queue_free()
 	router.queue_free()
 	await get_tree().process_frame
+	_done()
+
+
+func _test_proximity_math() -> void:
+	_section("proximity gain curves and the packet's gain bits")
+
+	for falloff in [0, 1, 2]:
+		var name: String = ["linear", "inverse", "quadratic"][falloff]
+		_check(is_equal_approx(DotVoiceProximity.gain(1.0, 40.0, 2.0, falloff), 1.0), "%s: full volume inside the minimum distance" % name)
+		_check(DotVoiceProximity.gain(40.0, 40.0, 2.0, falloff) == 0.0, "%s: silent at the radius" % name)
+		var last := 1.0
+		var monotonic := true
+		for d in range(3, 40):
+			var g := DotVoiceProximity.gain(float(d), 40.0, 2.0, falloff)
+			if g > last + 0.0001:
+				monotonic = false
+			last = g
+		_check(monotonic, "%s: never gets louder with distance" % name)
+	_check(is_equal_approx(DotVoiceProximity.gain(21.0, 40.0, 2.0, 0), 0.5), "linear: halfway is half")
+	_check(
+		DotVoiceProximity.gain(10.0, 40.0, 2.0, 2) < DotVoiceProximity.gain(10.0, 40.0, 2.0, 0),
+		"quadratic is quieter than linear at the same distance"
+	)
+
+	var packet := DotVoicePacket.new()
+	packet.sample_count = 480
+	packet.payload = PackedByteArray([1, 2, 3])
+	packet.starts_talk_spurt = true
+	packet.gain = 0.5
+	var back: DotVoicePacket = DotVoicePacket.from_bytes(packet.to_bytes()).value
+	_check(absf(back.gain - 0.5) < 0.01 and back.starts_talk_spurt, "a gain survives the wire beside the start flag", str(back.gain))
+	packet.gain = 1.0
+	_check(
+		(DotVoicePacket.from_bytes(packet.to_bytes()).value as DotVoicePacket).gain == 1.0,
+		"no gain bits means full volume"
+	)
+	_done()
+
+
+func _test_proximity_two_clients() -> void:
+	_section("proximity: volume falls with distance and nothing is sent beyond the radius")
+
+	var config := _config()
+	var router := DotVoiceRouter.new()
+	router.name = "ProxRouter"
+	router.config = config
+	router.max_bytes_per_second = 0
+	router.default_channel = DotVoiceRouter.Channel.PROXIMITY
+	router.proximity_range = 40.0
+	router.proximity_min_distance = 2.0
+	router.proximity_falloff = DotVoiceProximity.Falloff.LINEAR
+	add_child(router)
+
+	var talker_id := 111_111_111
+	var positions := {talker_id: Vector3.ZERO, 222: Vector3(5, 0, 0), 333: Vector3(30, 0, 0), 444: Vector3(60, 0, 0)}
+	router.position_fn = func(peer: int) -> Variant: return positions.get(peer)
+	for id in positions:
+		router.add_peer(int(id))
+
+	var listeners: Dictionary = {}
+	var heard: Dictionary = {}
+	for id in [222, 333, 444]:
+		var m := DotVoiceManager.new()
+		m.name = "ProxListener%d" % id
+		m.config = config
+		m.config_file = ""
+		m.register_service = false
+		var sink := DotVoiceSinkBuffer.new()
+		sink.sample_rate = config.sample_rate
+		heard[id] = sink
+		# The factory is set before the manager is in the tree, so no speaker can exist
+		# without it (the order a sink that hears silence would come from).
+		m.sink_factory = func(_speaker: int) -> DotVoiceSink: return sink
+		listeners[id] = m
+		add_child(m)
+	router.send_fn = func(peer: int, bytes: PackedByteArray) -> void:
+		var _r: bool = (listeners[peer] as DotVoiceManager).receive(bytes)
+
+	var talker := DotVoiceManager.new()
+	talker.name = "ProxTalker"
+	talker.config = config
+	talker.config_file = ""
+	talker.register_service = false
+	var mic := DotVoiceSourceBuffer.new()
+	mic.sample_rate = config.sample_rate
+	talker.source = mic
+	var first_frame: Array[PackedByteArray] = []
+	talker.send_fn = func(bytes: PackedByteArray) -> void:
+		if first_frame.is_empty():
+			first_frame.append(bytes)
+		var _r := router.relay(talker_id, bytes)
+	add_child(talker)
+	await get_tree().process_frame
+
+	var _s := talker.start_capture()
+	mic.write(DotVoiceSourceBuffer.tone(440.0, 0.6, config.sample_rate, 0.4))
+	talker.set_talking(true)
+	for _i in range(45):
+		await get_tree().process_frame
+
+	var near: float = (heard[222] as DotVoiceSinkBuffer).rms()
+	var far: float = (heard[333] as DotVoiceSinkBuffer).rms()
+	_check(talker.frames_sent > 10, "the talker sends frames (%d)" % talker.frames_sent)
+	_check(near > 0.05 and far > 0.01, "both listeners in range hear it (%.3f, %.3f)" % [near, far])
+	_check(near > far * 2.0, "the near one is louder (%.3f vs %.3f)" % [near, far])
+	# Linear, min 2, radius 40: 5 m is 0.921, 30 m is 0.263; ratio 0.286.
+	var ratio := far / maxf(near, 0.0001)
+	_check(absf(ratio - 0.286) < 0.06, "and by the cvars' curve (ratio %.3f, expected 0.286)" % ratio)
+	_check(
+		(listeners[444] as DotVoiceManager).frames_received == 0,
+		"beyond the radius, no frame is sent at all (%d)" % (listeners[444] as DotVoiceManager).frames_received
+	)
+	_check(
+		(listeners[222] as DotVoiceManager).frames_received == talker.frames_sent,
+		"inside it every frame is (%d of %d)" % [(listeners[222] as DotVoiceManager).frames_received, talker.frames_sent]
+	)
+
+	# The cvars move the curve, not just the constants.
+	var got: Array[float] = []
+	router.send_fn = func(peer: int, bytes: PackedByteArray) -> void:
+		if peer == 333:
+			got.append((DotVoicePacket.from_bytes(bytes).value as DotVoicePacket).gain)
+	var frame: PackedByteArray = first_frame[0]
+	var _r := router.relay(talker_id, frame)
+	_check(got.size() == 1 and absf(got[0] - 0.263) < 0.02, "30 m gets 0.263 (%s)" % str(got))
+	_check(router.set_cvar("sv_voice_proximity_range", "100"), "sv_voice_proximity_range applies")
+	_check(router.set_cvar("sv_voice_proximity_min", "10"), "sv_voice_proximity_min applies")
+	_check(router.set_cvar("sv_voice_proximity_falloff", "2"), "sv_voice_proximity_falloff applies")
+	got.clear()
+	_r = router.relay(talker_id, frame)
+	var expected := pow(1.0 - (30.0 - 10.0) / 90.0, 2.0)
+	_check(got.size() == 1 and absf(got[0] - expected) < 0.02, "range 100, min 10, quadratic: 30 m is %.3f (%s)" % [expected, str(got)])
+
+	# A client's own gain bits are the server's to set, not the talker's.
+	var cheat := frame.duplicate()
+	cheat.encode_u8(DotVoicePacket.OFFSET_FLAGS, cheat.decode_u8(DotVoicePacket.OFFSET_FLAGS) | DotVoicePacket.gain_bits(0.05))
+	router.set_cvar("sv_voice_proximity_range", "40")
+	router.set_cvar("sv_voice_proximity_min", "40")
+	router.set_cvar("sv_voice_proximity_falloff", "0")
+	positions[333] = Vector3(1, 0, 0)
+	got.clear()
+	_r = router.relay(talker_id, cheat)
+	_check(got.size() == 1 and got[0] == 1.0, "a talker cannot set their own gain (%s)" % str(got))
+
+	# Occlusion: a wall turns the voice down; off, the same wall is ignored.
+	router.occlusion_fn = func(_l: Vector3, _s: Vector3) -> bool: return true
+	got.clear()
+	_r = router.relay(talker_id, frame)
+	_check(got == [1.0], "occlusion off: the wall is ignored")
+	router.set_cvar("sv_voice_proximity_occlusion", "1")
+	router.set_cvar("sv_voice_proximity_occlusion_gain", "0.5")
+	got.clear()
+	_r = router.relay(talker_id, frame)
+	_check(got.size() == 1 and absf(got[0] - 0.5) < 0.01, "occlusion on: half volume through the wall (%s)" % str(got))
+	router.set_cvar("sv_voice_proximity_occlusion_gain", "0")
+	got.clear()
+	_r = router.relay(talker_id, frame)
+	_check(got.is_empty(), "occlusion gain 0: nothing is sent through a wall")
+
+	# Team and global channels bypass or not, per cvar, with a client that picks its channel.
+	router.proximity_occlusion = false
+	router.honour_packet_channel = true
+	router.team_fn = func(_p: int) -> int: return 1
+	var team_frame := frame.duplicate()
+	team_frame.encode_u8(DotVoicePacket.OFFSET_CHANNEL, DotVoiceRouter.Channel.TEAM)
+	var all_frame := frame.duplicate()
+	all_frame.encode_u8(DotVoicePacket.OFFSET_CHANNEL, DotVoiceRouter.Channel.ALL)
+	var counted: Array[int] = []
+	router.send_fn = func(peer: int, _b: PackedByteArray) -> void: counted.append(peer)
+	_r = router.relay(talker_id, team_frame)
+	_check(counted.size() == 4 - 1, "team bypass on: a team packet reaches the whole team, any distance (%d)" % counted.size())
+	counted.clear()
+	router.set_cvar("sv_voice_proximity_team_bypass", "0")
+	_r = router.relay(talker_id, team_frame)
+	_check(not counted.has(444), "team bypass off: a team packet is range-limited (%s)" % str(counted))
+	counted.clear()
+	_r = router.relay(talker_id, all_frame)
+	_check(not counted.has(444), "global bypass off (default): the everybody channel is range-limited too")
+	counted.clear()
+	router.set_cvar("sv_voice_proximity_global_bypass", "1")
+	_r = router.relay(talker_id, all_frame)
+	_check(counted.has(444), "global bypass on: a global shout reaches past the radius")
+
+	talker.set_talking(false)
+	talker.queue_free()
+	for id in listeners:
+		(listeners[id] as Node).queue_free()
+	router.queue_free()
+	await get_tree().process_frame
+	_done()
+
+
+func _test_look_mute() -> void:
+	_section("look at a player: tap gags, double-tap mutes, both rebindable")
+
+	var config := _config()
+	var manager := DotVoiceManager.new()
+	manager.config = config
+	manager.config_file = ""
+	manager.register_service = false
+	add_child(manager)
+
+	var look := DotVoiceLookMute.new()
+	look.manager = manager
+	var target := [7]
+	look.target_fn = func() -> int: return target[0]
+	var chat_calls: Array = []
+	look.chat_mute_fn = func(peer: int, on: bool) -> void: chat_calls.append([peer, on])
+	add_child(look)
+
+	look.tap(1000)
+	_check(look.is_gagged(7) and not look.is_muted(7), "a tap gags")
+	look.tap(2000)
+	_check(not look.is_gagged(7), "a later tap un-gags")
+	look.tap(5000)
+	look.tap(5200)
+	_check(look.is_muted(7) and not look.is_gagged(7), "a double-tap mutes and leaves no gag behind")
+	_check(chat_calls == [[7, true]], "and mutes chat through chat_mute_fn")
+	_check(manager.local_mutes.has(7), "voice is muted on the manager")
+	look.tap(9000)
+	look.tap(9100)
+	_check(not look.is_muted(7) and chat_calls.back() == [7, false], "double-tap again un-mutes")
+
+	target[0] = 8
+	look.tap(12000)
+	target[0] = 9
+	look.tap(12100)
+	_check(look.is_gagged(8) and look.is_gagged(9) and not look.is_muted(9), "taps on two different players are not a double-tap")
+	target[0] = 0
+	look.tap(13000)
+	_check(look.is_gagged(8), "looking at nobody does nothing")
+	target[0] = 8
+
+	# A gagged speaker's frames are dropped; the others' are not.
+	var packet := DotVoicePacket.new()
+	packet.speaker = 8
+	packet.sample_count = config.frame_samples()
+	packet.payload = PackedByteArray([0, 0, 0, 0])
+	var _r := manager.receive(packet.to_bytes())
+	_check(manager.active_speakers().is_empty() and manager.describe()["speakers"] == 0, "a gagged speaker's voice is not played")
+	look.set_gag(8, false)
+	_check(not manager.is_gagged(8), "un-gag restores them")
+
+	# Separate keys: the gag key never mutes, the mute key never gags.
+	look.separate_keys = true
+	target[0] = 20
+	look.tap(20000)
+	look.tap(20100)
+	_check(not look.is_gagged(20) and not look.is_muted(20), "separate keys: two quick gag taps just toggle twice")
+	look.tap(21000, true)
+	_check(look.is_muted(20) and not look.is_gagged(20), "separate keys: the mute key mutes")
+
+	# Both are InputMap actions, so a key table can rebind them.
+	DotVoiceLookMute.ensure_actions()
+	_check(InputMap.has_action(DotVoiceLookMute.GAG_ACTION) and InputMap.has_action(DotVoiceLookMute.MUTE_ACTION), "both keys are InputMap actions")
+	InputMap.action_erase_events(DotVoiceLookMute.GAG_ACTION)
+	var rebound := InputEventKey.new()
+	rebound.physical_keycode = KEY_B
+	InputMap.action_add_event(DotVoiceLookMute.GAG_ACTION, rebound)
+	var press := InputEventKey.new()
+	press.physical_keycode = KEY_B
+	press.pressed = true
+	look.separate_keys = false
+	target[0] = 30
+	look._unhandled_input(press)
+	_check(look.is_gagged(30), "a rebound gag key gags")
+	InputMap.action_erase_events(DotVoiceLookMute.GAG_ACTION)
+	var home := InputEventKey.new()
+	home.physical_keycode = DotVoiceLookMute.DEFAULT_GAG_KEY
+	InputMap.action_add_event(DotVoiceLookMute.GAG_ACTION, home)
+
+	# Server side: allowed and default are cvars.
+	_check(look.set_cvar(DotVoiceLookMute.CVAR_GAG_ALLOWED, "0"), "sv_voice_gag_allowed applies")
+	target[0] = 40
+	look.tap(30000)
+	_check(not look.is_gagged(40), "gag not allowed: a tap does nothing")
+	look.tap(40000)
+	look.tap(40100)
+	_check(look.is_muted(40), "but a double-tap still mutes when mute is allowed")
+	look.set_cvar(DotVoiceLookMute.CVAR_MUTE_ALLOWED, "0")
+	target[0] = 41
+	look.tap(50000)
+	look.tap(50100)
+	_check(not look.is_muted(41), "mute not allowed: no mute")
+	look.set_cvar(DotVoiceLookMute.CVAR_GAG_DEFAULT, "1")
+	_check(manager.is_gagged(500) and not manager.is_gagged(8), "gag default: strangers start gagged, anyone un-gagged stays heard")
+
+	look.queue_free()
+	manager.queue_free()
 	_done()
 
 

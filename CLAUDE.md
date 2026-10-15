@@ -22,6 +22,7 @@ Read the family [CLAUDE.md](../../CLAUDE.md) first; this file is only what is sp
 | `codec/` | `DotVoiceCodec` registry, `pcm16`, `adpcm` (the default) |
 | `wire/dot_voice_packet.gd` | `DotVoicePacket`: version 2, `OFFSET_*`, `sequence_delta` |
 | `runtime/dot_voice_router.gd` | `DotVoiceRouter`: the server side; channels, mutes, rate limit, `team_fn`, `position_fn`, `can_hear_fn` |
+| `runtime/dot_voice_proximity.gd`, `runtime/dot_voice_look_mute.gd` | `DotVoiceProximity`: falloff curves and a ray occluder; `DotVoiceLookMute`: look at a player, tap gags, double-tap mutes, rebindable (`voice_gag`, `voice_mute`) |
 | `runtime/dot_voice_manager.gd` | `DotVoiceManager`: the client side; `start_capture()`, playback, `local_mutes` |
 | `dot_voice_config.gd` | `DotVoiceConfig`: sample rate, frame length, codec, `format_fingerprint()`, `frame_samples()` |
 | `examples/voice_selftest.tscn` | the suite, no audio device needed |
@@ -32,7 +33,7 @@ Paths except `examples/` are in `addons/dot_voice/`.
 
 ## Running and testing
 
-The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything)), then `godot --headless --path . res://examples/voice_selftest.tscn` (136 checks, including two clients over real WebSockets). The device layer is not in it: `tools/voice_device_probe.sh` runs it on a real ALSA device under Xvfb, and `node tools/web_voice_check.mjs` in Chromium with a fake microphone. [design](docs/design.md#the-device-layer-and-the-browser)
+The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything)), then `godot --headless --path . res://examples/voice_selftest.tscn` (189 checks, including two clients over real WebSockets). The device layer is not in it: `tools/voice_device_probe.sh` runs it on a real ALSA device under Xvfb, and `node tools/web_voice_check.mjs` in Chromium with a fake microphone. [design](docs/design.md#the-device-layer-and-the-browser)
 
 ## Rules that bite
 
@@ -51,5 +52,6 @@ The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything
 - `enabled` (`sv_voice_enable`) is enforced on the router; clients follow it through `follow_cvars(link)` and only hide their key. `bind_cvars(add, FLAG_REPLICATED)` on the authoritative router. [design](docs/design.md#the-servers-switch)
 - Positional playback needs `speaker_position_fn`; without it voices are flat, never at the origin. [history](docs/history.md#every-voice-at-the-worlds-origin)
 - Test with full-width peer ids, not 2 and 7. [history](docs/history.md#the-speaker-id-was-16-bits)
+- Proximity is a gain the server computes per listener and carries in bits 1..7 of the packet's flags byte (version stays 2); a packet past the radius is not sent. The router resets a client's own gain bits. Cvars `sv_voice_proximity_*`; occlusion is off until `occlusion_fn` is set and the cvar is on. Gag and mute are client-local (`gagged`, apart from `local_mutes` so `sm` and look-mute do not undo each other); the server only says whether they are allowed (`sv_voice_gag_allowed`, `sv_voice_mute_allowed`, `sv_voice_gag_default`).
 
 Deliberately not here: Opus, echo cancellation, noise suppression (GDExtension work), a transport (`send_fn` takes bytes), a voice UI, recording to disk. [design](docs/design.md#deliberately-not-here)
