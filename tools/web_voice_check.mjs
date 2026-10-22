@@ -2,7 +2,7 @@
 // the template the client shell uses), serves it, starts examples/web_voice_server.gd, and
 // drives Chromium with a fake microphone (its built-in beep) through Playwright.
 //
-//   node tools/web_voice_check.mjs [--keep]
+//   node tools/web_voice_check.mjs [--keep] [--cdp=http://127.0.0.1:9222]
 //
 // What it asserts:
 //   1. the page does not call getUserMedia before the talk key is pressed;
@@ -16,7 +16,7 @@ import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const PLAYWRIGHT = '/home/christian/stack/website-city/node_modules/playwright-core/index.js';
+const PLAYWRIGHT = process.env.PLAYWRIGHT_CORE ?? '/home/christian/stack/website-city/node_modules/playwright-core/index.js';
 const OUT = join(ROOT, 'build', 'web-voice');
 const WS_PORT = 47380;
 const HTTP_PORT = 47381;
@@ -72,11 +72,13 @@ server.stdout.on('data', d => {
   }
 });
 
-const browser = await pw.chromium.launch({
+// --cdp=URL drives an already running Chrome (the GPU box's real one) instead of launching Chromium.
+const cdp = (process.argv.find(a => a.startsWith('--cdp=')) ?? '').slice(6);
+const browser = cdp ? await pw.chromium.connectOverCDP(cdp) : await pw.chromium.launch({
   headless: true,
   args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--use-gl=swiftshader', '--enable-unsafe-swiftshader'],
 });
-const context = await browser.newContext({ viewport: { width: 640, height: 360 } });
+const context = cdp ? browser.contexts()[0] : await browser.newContext({ viewport: { width: 640, height: 360 } });
 await context.grantPermissions(['microphone'], { origin: `http://127.0.0.1:${HTTP_PORT}` });
 const page = await context.newPage();
 await page.addInitScript(() => {
