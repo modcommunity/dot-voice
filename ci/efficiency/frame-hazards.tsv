@@ -1,0 +1,5 @@
+# frame-hazards
+# Baselines only shrink: scripts/<gate> --update lowers or drops entries and refuses to add.
+addons/dot_voice/runtime/dot_voice_manager.gd::_scaled::duplicate	1
+examples/web_voice_probe.gd::_process::string_build	1
+examples/web_voice_server.gd::_process::string_build	1

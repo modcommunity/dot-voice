@@ -1,0 +1,13 @@
+# size
+# Baselines only shrink: scripts/<gate> --update lowers or drops entries and refuses to add.
+addons/dot_voice/runtime/dot_voice_router.gd::_listeners_for	81
+addons/dot_voice/runtime/dot_voice_router.gd::relay	89
+examples/voice_device_probe.gd::_run	123
+examples/voice_selftest.gd	1681
+examples/voice_selftest.gd::_test_end_to_end	130
+examples/voice_selftest.gd::_test_jitter_loss_and_overflow	82
+examples/voice_selftest.gd::_test_look_mute	111
+examples/voice_selftest.gd::_test_over_a_real_socket	143
+examples/voice_selftest.gd::_test_proximity_two_clients	151
+examples/voice_selftest.gd::_test_router	186
+examples/voice_selftest.gd::_test_server_switch	147
