@@ -2,23 +2,9 @@
 class_name DotVoiceLookMute
 extends Node
 
-## Look at a player and press a key to stop hearing them.
+## Look at a player and press a key to stop hearing them: tap gags (voice), double-tap mutes (voice and chat via [member chat_mute_fn]).
 ##
-## [b]Tap gags, double-tap mutes.[/b] A gag is voice only (you stop hearing them); a mute is
-## voice and chat (see [member chat_mute_fn]; dot-chat is not a dependency). Each can sit on
-## its own key instead ([member separate_keys]); both are InputMap actions, so dot-menu's
-## key table rebinds them like any other.
-##
-## [b]The first tap acts at once and the second undoes it.[/b] Waiting out the double-tap
-## window before gagging would make every gag feel 300 ms late; instead a second tap on the
-## same player inside the window reverts the gag the first one made and toggles the mute.
-##
-## [b]Client-local, always.[/b] Nothing here reaches the server: a gag is a preference, and
-## the server-side switches are cvars that only say whether it is allowed
-## ([constant CVAR_GAG_ALLOWED], [constant CVAR_MUTE_ALLOWED]) and whether everybody starts
-## gagged ([constant CVAR_GAG_DEFAULT], applied to [member DotVoiceManager.gag_default]).
-## The host supplies who is being looked at ([member target_fn]); [method pick_by_angle]
-## is a ready answer.
+## The first tap acts at once and the second reverts the gag and toggles the mute, so no gag waits out the window. Client-local; the cvars ([constant CVAR_GAG_ALLOWED], [constant CVAR_MUTE_ALLOWED], [constant CVAR_GAG_DEFAULT]) only gate it. The host supplies [member target_fn]; [method pick_by_angle] is a ready answer.
 
 const CHANNEL := "voice.look_mute"
 
@@ -156,10 +142,8 @@ func set_muted(speaker: int, on: bool) -> void:
 	mute_changed.emit(speaker, on)
 
 
-## Picks the peer whose position is most nearly where the eye looks: the one with the
-## smallest angle to the view axis inside [param max_angle_deg] and [param max_distance].
-## [param positions] is peer -> Vector3 (the players other than the viewer). 0 for nobody.
-## A game with physics can use a ray instead and assign [member target_fn] its own.
+## Picks the peer nearest the view axis inside [param max_angle_deg] and [param max_distance]; 0 for nobody.
+## [param positions] is peer -> Vector3 (excluding the viewer). A physics game can assign its own ray to [member target_fn].
 static func pick_by_angle(
 		eye: Transform3D, positions: Dictionary, max_distance: float = 30.0, max_angle_deg: float = 6.0
 ) -> int:

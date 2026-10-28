@@ -2,11 +2,7 @@
 class_name DotVoiceSinkBuffer
 extends DotVoiceSink
 
-## A sink that keeps what it was given, so a test can look at it.
-##
-## What makes the suite able to say "the listener heard the tone and the muted player
-## heard nothing" rather than "no errors were logged", which is the difference between a
-## test and a smoke test.
+## A sink that keeps what it was given, so a test can assert on what a listener heard.
 
 var samples: PackedFloat32Array = PackedFloat32Array()
 var frames_written: int = 0

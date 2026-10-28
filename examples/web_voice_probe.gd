@@ -2,14 +2,7 @@ extends Node
 
 ## Voice in a browser: the page's half of tools/web_voice_check.mjs.
 ##
-## Connects to `?ws=ws://host:port` (the check's server, examples/web_voice_server.gd), holds
-## nothing open until the talk key is pressed, then sends the browser's microphone and plays
-## whatever the server relays. Prints one `VOICEPROBE {json}` line a second for the check to
-## read from the console.
-##
-## [b]It asks for the microphone on the first press of V and not before[/b], through
-## [method DotVoiceManager.update_talk], exactly as a game does: the check counts the page's
-## `getUserMedia` calls before and after the press.
+## Connects to `?ws=ws://host:port`, asks for the microphone on the first press of V via [method DotVoiceManager.update_talk] (the check counts `getUserMedia` calls), and prints one `VOICEPROBE {json}` line a second.
 
 var _ws := WebSocketPeer.new()
 var _talker: DotVoiceManager = null

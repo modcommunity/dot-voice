@@ -2,60 +2,14 @@
 class_name DotVoicePacket
 extends RefCounted
 
-## One frame of encoded speech, as it travels.
+## One frame of encoded speech. Header layout in docs/design.md (wire format); offsets are the [code]OFFSET_*[/code] constants.
 ##
-## [codeblock]
-## byte  0     version (2)
-## byte  1     flags
-## bytes 2-5   speaker id, unsigned 32-bit
-## bytes 6-7   sequence, unsigned, wraps
-## bytes 8-9   sample count in this frame
-## byte  10    channel
-## byte  11    codec id index, or 255 with a length-prefixed name
-## bytes ...   payload
-## [/codeblock]
-##
-## [b]Ten bytes of header on a 124-byte ADPCM frame is 8%, and every field earns it:[/b]
-##
-## - [b]speaker[/b] because a listener receives a relayed packet and has to know whose
-##   jitter buffer it belongs in. A transport's own sender id is the SERVER on every
-##   relayed packet, which is the same for everyone. It is 32 bits wide, because a Godot
-##   peer id is a 31-bit random number and a narrower field is two players sharing one
-##   voice — see [constant VERSION].
-## - [b]sequence[/b] because UDP reorders, and a jitter buffer that cannot order frames
-##   plays them in arrival order, which is worse than dropping the late one.
-## - [b]sample count[/b] because a stateful codec cannot always tell from the bytes, and
-##   guessing wrong yields speech at the wrong speed rather than an error.
-## - [b]channel[/b] because a server relaying to a team and to everybody is relaying the
-##   same audio twice, and the listener has to know which it is hearing to apply the
-##   right gain.
-## - [b]codec[/b] because a mismatch is otherwise silent noise. See
-##   [method DotVoiceConfig.format_fingerprint].
-##
-## The version byte is first so a future format can be refused rather than misread.
+## Fields: version (first, so a new format is refused), flags, 32-bit speaker (a relayed packet's transport sender is the server), sequence, sample count, channel, codec index.
 
-## [b]Version 2 widened the speaker field from 16 bits to 32.[/b] Godot assigns a
-## multiplayer peer a 31-bit random id, so `speaker & 0xFFFF` is not a peer id: it matches
-## nobody on the receiving end, and — the part that is not merely cosmetic — two players
-## whose ids differ only above bit 16 become ONE speaker to every listener. Their frames
-## go into one jitter buffer with interleaved sequence numbers, through one stateful ADPCM
-## decoder, and both come out as noise with nothing erroring anywhere. Sixty-four players
-## against a 16-bit space is about a 3% chance per server of two of them colliding, which
-## is a bug that happens to somebody every week and is unexplainable when it does.
-##
-## Found by the first suite in this family to relay a frame between two real clients over real sockets and then ask a listener WHO was
-## talking. dot-voice's own suite could not see it: it drives the router and the jitter
-## buffer directly with small speaker numbers, and every one of them fits in 16 bits.
+## Version 2 widened the speaker from 16 to 32 bits: Godot peer ids are 31-bit, so two players differing above bit 16 became one speaker and decoded to noise.
 const VERSION := 2
 
-## Where each header field sits, named once.
-##
-## [b]Named because the version-2 widening broke three tests that had the numbers written
-## in by hand.[/b] They poked a byte at offset 6 to build a malformed packet, offset 6 had
-## become the sequence rather than the sample count, and the checks then asserted that a
-## packet with a strange sequence number was refused — which it is not, and should not be.
-## Every one of them still passed for the wrong reason the moment the offsets moved back
-## by luck. This family's most repeated bug is two copies of one list; these are the list.
+## Where each header field sits, named once so tests do not hand-write offsets.
 const OFFSET_VERSION := 0
 const OFFSET_FLAGS := 1
 const OFFSET_SPEAKER := 2
@@ -89,19 +43,13 @@ var payload: PackedByteArray = PackedByteArray()
 
 ## Set on the first packet after a gate opens.
 ##
-## [b]The decoder needs to know a stream started.[/b] Without it a speaker who stops for
-## a minute and starts again resumes into a jitter buffer still holding their old
-## sequence numbers, and every new frame looks impossibly late and is discarded. The
-## speaker is then inaudible until the sequence wraps around, which at 50 frames a second
-## is twenty-two minutes.
+## Without it a resumed speaker lands in a jitter buffer holding old sequence numbers and is discarded until the wrap.
 var starts_talk_spurt: bool = false
 
 const FLAG_START := 1 << 0
 
-## Bits 1..7 of the flags byte carry the listener's gain, 0..127. [b]Not a new field, so
-## the version stays 2[/b]: a build that predates it masks the flags with FLAG_START and
-## plays at full volume. 0 means "unattenuated", which is also what a client's own
-## packet carries, so nothing that never heard of gain changes.
+## Bits 1..7 of the flags byte carry the listener's gain, 0..127; 0 means unattenuated.
+## Not a new field, so the version stays 2: older builds mask with FLAG_START and play at full volume.
 const GAIN_SHIFT := 1
 const GAIN_STEPS := 127
 
@@ -127,10 +75,8 @@ func to_bytes() -> PackedByteArray:
 
 	out.encode_u8(OFFSET_VERSION, VERSION)
 	out.encode_u8(OFFSET_FLAGS, (FLAG_START if starts_talk_spurt else 0) | gain_bits(gain))
-	# [b]32 bits, because a Godot peer id is a 31-bit random number.[/b] See the note on
-	# [constant VERSION]. `& 0xFFFFFFFF` rather than a bare assignment so a host that
-	# passes something larger — an occupant id, a database row — truncates predictably
-	# instead of writing garbage into the two bytes after it.
+	# 32 bits (see [constant VERSION]); masked so a larger host id (occupant, database row)
+	# truncates predictably.
 	out.encode_u32(OFFSET_SPEAKER, speaker & 0xFFFFFFFF)
 	out.encode_u16(OFFSET_SEQUENCE, sequence & 0xFFFF)
 	out.encode_u16(OFFSET_SAMPLE_COUNT, sample_count & 0xFFFF)
@@ -154,10 +100,7 @@ func to_bytes() -> PackedByteArray:
 
 ## Parses bytes off the wire.
 ##
-## [b]Every field is bounds-checked, because this is attacker-controlled input.[/b] A
-## voice packet arrives from a client before that client has done anything else
-## trustworthy, and a decoder that believes a declared sample count allocates whatever it
-## is told to.
+## Every field is bounds-checked: this is attacker-controlled input and a declared sample count must not drive an allocation.
 static func from_bytes(bytes: PackedByteArray, max_samples: int = 4096) -> DotResult:
 	if bytes.size() < HEADER_BYTES:
 		return DotResult.fail(
@@ -226,12 +169,9 @@ static func from_bytes(bytes: PackedByteArray, max_samples: int = 4096) -> DotRe
 	return DotResult.success(packet)
 
 
-## Distance from [param earlier] to this packet's sequence, accounting for the wrap.
+## Distance from [param earlier] to this packet's sequence, accounting for the 16-bit wrap.
 ##
-## [b]Sequence numbers wrap at 65536 and a naive subtraction is wrong across it.[/b]
-## Frame 0 arriving after frame 65535 is one frame later, not 65535 frames earlier, and a
-## jitter buffer that gets this wrong discards a speaker's audio for eleven minutes once
-## every twenty. Returns a signed distance in half the range either way.
+## Frame 0 after 65535 is one later; naive subtraction discards a speaker for minutes. Signed, half the range either way.
 static func sequence_delta(later: int, earlier: int) -> int:
 	var d := (later - earlier) & 0xFFFF
 	return d - 65536 if d > 32767 else d

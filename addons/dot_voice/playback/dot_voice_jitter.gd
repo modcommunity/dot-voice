@@ -4,24 +4,7 @@ extends RefCounted
 
 ## One speaker's incoming frames, put back in order and handed out at a steady rate.
 ##
-## [b]This class is the difference between voice that works and voice that does not.[/b]
-## Packets arrive reordered, late, duplicated and not at all, and playback needs a frame
-## every 20 ms regardless. So frames are held briefly, sorted by sequence, and pulled at
-## the rate the output device consumes them.
-##
-## Four things it has to get right, each of which is a way voice breaks in practice:
-##
-## - [b]Ordering.[/b] UDP reorders. Playing in arrival order is worse than dropping the
-##   late frame, because a syllable in the wrong place is heard as a different word.
-## - [b]The wrap.[/b] Sequence numbers are 16 bits.
-##   [method DotVoicePacket.sequence_delta] is the only place that arithmetic is done.
-## - [b]Growth.[/b] A sender whose frames arrive faster than real time, which is what a
-##   reconnect or a catching-up host looks like, would otherwise add delay for ever.
-##   Past [member max_frames] the oldest are dropped, because the newest are the ones
-##   somebody is waiting to hear.
-## - [b]Gaps.[/b] A missing frame is filled by fading the last one out rather than by
-##   inserting silence. A hard cut to zero is a step edge and is heard as a click, which
-##   is more noticeable than the syllable that went missing.
+## Packets arrive reordered, late and missing, so frames are sorted by sequence ([method DotVoicePacket.sequence_delta] owns the 16-bit wrap), the oldest dropped past [member max_frames], and a gap is filled by fading the last frame out (silence clicks).
 
 const CHANNEL := "voice.jitter"
 
@@ -68,10 +51,9 @@ func push(packet: DotVoicePacket) -> bool:
 		return false
 
 	if packet.sample_count != frame_samples:
-		# A frame of a different length than this buffer was built for. Refused rather
-		# than resampled: the two ends disagree about the format, and playing it would
-		# produce speech at the wrong speed, which reads as a broken microphone rather
-		# than as a misconfiguration.
+		# A different frame length means the ends disagree about the format. Refused, not
+		# resampled: playing it would be speech at the wrong speed, which reads as a broken
+		# microphone.
 		DotLog.debug(CHANNEL, "refusing a frame of the wrong length", {
 			"got": packet.sample_count, "want": frame_samples
 		})
@@ -124,10 +106,7 @@ func push(packet: DotVoicePacket) -> bool:
 
 ## Whether enough is buffered to start, or to keep going.
 ##
-## [b]Asymmetric on purpose.[/b] Starting takes [member target_frames]; continuing takes
-## one. A buffer that re-applied the start condition on every frame would stall for the
-## whole target every time a single packet was late, turning one dropped packet into
-## sixty milliseconds of silence.
+## Asymmetric: starting takes [member target_frames], continuing takes one, or a single late packet would stall for the whole target.
 func is_ready() -> bool:
 	if _playing:
 		return not _frames.is_empty()
@@ -136,8 +115,7 @@ func is_ready() -> bool:
 
 ## Hands out the next frame of samples, or an empty array when there is nothing to play.
 ##
-## Call once per output period. A gap in the sequence is concealed rather than skipped,
-## so the timeline advances at a constant rate no matter what arrived.
+## Call once per output period; a sequence gap is concealed, not skipped, so the timeline never stalls.
 func pop() -> PackedFloat32Array:
 	if not is_ready():
 		if _playing and _frames.is_empty():
@@ -171,9 +149,7 @@ func pop() -> PackedFloat32Array:
 
 ## What to play when a frame never arrived.
 ##
-## The previous frame, faded out. Silence is a step edge and clicks; repeating the frame
-## unchanged buzzes at the frame rate. A fade is neither, and at 20 ms nobody hears the
-## difference between this and the syllable that was lost.
+## The previous frame faded out: silence is a step edge that clicks, repeating it buzzes.
 func _conceal() -> PackedFloat32Array:
 	var out := PackedFloat32Array()
 	out.resize(frame_samples)

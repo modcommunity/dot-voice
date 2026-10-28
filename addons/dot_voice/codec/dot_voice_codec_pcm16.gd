@@ -2,12 +2,9 @@
 class_name DotVoiceCodecPcm16
 extends DotVoiceCodec
 
-## Linear 16-bit PCM. Exact, stateless, and twice the bandwidth of anything else.
+## Linear 16-bit PCM: exact, stateless, twice the bandwidth.
 ##
-## Here because it is the reference every other codec is checked against: a round trip
-## through this differs from the input by less than one quantisation step, so a test that
-## fails with this passes nothing. It is also the right choice on a LAN, where 48 kB/s a
-## speaker is free and the extra quality is not.
+## The reference every codec is checked against (round trip within one quantisation step); fine on a LAN.
 
 ## Full scale. 32767 rather than 32768 so +1.0 and -1.0 are symmetric and neither wraps.
 const SCALE := 32767.0

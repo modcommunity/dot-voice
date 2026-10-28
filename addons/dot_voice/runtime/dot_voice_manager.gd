@@ -2,36 +2,15 @@
 class_name DotVoiceManager
 extends Node
 
-## The node a game adds. Captures, encodes, sends, receives, decodes and plays.
+## The node a game adds: captures, encodes, sends, receives, decodes and plays (usage in docs/design.md).
 ##
-## [codeblock]
-## var voice := DotVoiceManager.new()
-## voice.config = my_config
-## voice.send_fn = func(bytes: PackedByteArray) -> void: link.send_voice(bytes)
-## add_child(voice)
-##
-## await voice.start_capture()          # only once the player has agreed
-## voice.set_talking(Input.is_action_pressed("voice"))
-## [/codeblock]
-##
-## [b]Nothing here opens a microphone on its own.[/b] Not on ready, not on a config flag
-## being true in an exported default. A game that records people because a node entered
-## the tree is a game that records people who did not ask, and no amount of documentation
-## makes that acceptable. [method start_capture] is an explicit call the host makes after
-## the player has agreed, and it returns a failure the host can put on screen.
-##
-## [b]Capture is polled from `_process`, not from a thread.[/b] The browser has no threads
-## unless the template was built for them, and [AudioEffectCapture] must be drained from
-## somewhere anyway. At fifty frames a second the work is one codec call, which is
-## nothing next to rendering.
+## Nothing opens a microphone on its own: the host calls [method start_capture] after the player agrees, and it returns a failure the host can show. Capture is polled from [code]_process[/code], not a thread: the browser has none, and it is one codec call per frame.
 
 const CHANNEL := "voice"
 const SERVICE := &"dot_voice_manager"
 
-## Registry name of the manager that is this process's own player's voice: what a settings
-## menu binds its voice rows to. Not [constant SERVICE]: a suite running a server and two
-## clients in one process holds several managers, and only the host knows which one is the
-## person at the keyboard. Published with [method publish_as_client].
+## Registry name of the manager that is this process's own player's voice, for a settings menu's voice rows.
+## Not [constant SERVICE]: a suite with a server and two clients holds several managers. Published with [method publish_as_client].
 const CLIENT_SERVICE := &"dot_voice_client"
 
 ## The InputMap action held to talk. dot-menu's key table stores it as `bind_voice_talk`;
@@ -94,18 +73,13 @@ var send_fn: Callable = Callable()
 ## Assign a [DotVoiceSourceBuffer] for a bot, a test, or playing a recording in.
 var source: DotVoiceSource = null
 
-## Builds the sink for a speaker. Defaults to a [DotVoiceSinkPlayer].
-##
-## Assign to route audio somewhere else: a recorder, a mixer the game owns, or a
-## [DotVoiceSinkBuffer] in a test.
+## Builds the sink for a speaker; defaults to a [DotVoiceSinkPlayer].
+## Assign to route audio elsewhere (a recorder, a game mixer, a [DotVoiceSinkBuffer] in a test).
 var sink_factory: Callable = Callable()
 
-## Where a speaker is, for [member positional_playback]:
-## [code]func(speaker: int) -> Variant[/code], a Vector3 or null for "not in the world".
+## Where a speaker is, for [member positional_playback]: [code]func(speaker: int) -> Variant[/code], a Vector3 or null.
 ##
-## [b]Positional with no position is a voice at the world's origin[/b], which a listener
-## more than a range away never hears and one nearby hears from the wrong side. So
-## positional playback is only used when this is set; without it every voice is flat.
+## Positional playback is used only when this is set; with no position a voice sits at the origin and is heard from the wrong side or not at all.
 var speaker_position_fn: Callable = Callable()
 
 ## Whether the server lets anybody talk. Off: nothing is captured or sent, what arrives is
@@ -122,10 +96,7 @@ var playback_bus: StringName = VOICE_BUS
 
 ## Speakers this client has chosen not to hear.
 ##
-## [b]A preference, not a punishment, and the distinction matters.[/b] This is applied
-## here, on the listener's own machine, and it is the right place for "I do not want to
-## hear this person". A moderator's mute is applied on the server by [DotVoiceRouter],
-## because a mute a client applies to itself is one the muted player can simply not apply.
+## A preference applied on the listener's machine; a moderator's mute is [DotVoiceRouter]'s, because a client-applied mute can simply not be applied.
 var local_mutes: Dictionary = {}
 
 ## Speakers this client has gagged: it stops hearing them, and nothing else changes.
@@ -217,13 +188,10 @@ func _exit_tree() -> void:
 		DotRegistry.signals().service_registered.disconnect(_on_service_registered)
 
 
-# --- Capture ---------------------------------------------------------------
 
 ## Opens the microphone. Call this when the player has agreed, and not before.
 ##
-## Returns a failure describing why not, which a host should show rather than swallow:
-## "audio input is disabled in this project's settings" is a five-second fix that a
-## silent failure turns into an afternoon.
+## Returns a failure the host should show rather than swallow (e.g. audio input disabled in project settings).
 func start_capture() -> DotResult:
 	if _capturing:
 		return DotResult.success(true)
@@ -283,16 +251,9 @@ func set_talking(pressed: bool) -> void:
 		gate.set_pressed(pressed and server_enabled)
 
 
-## The talk key, held or not, once a frame: what a client calls instead of [method
-## set_talking] and [method start_capture].
+## The talk key, held or not, once a frame: what a client calls instead of [method set_talking] and [method start_capture].
 ##
-## [b]The first press is the player's consent, and it is where the microphone opens.[/b]
-## Not at load, not when a node entered the tree: a browser shows its permission prompt the
-## moment a page asks, and a prompt on load is a prompt nobody connected to talking. A key
-## press is also the user gesture a browser wants before it lets a page start audio. In
-## open-mic mode the same first press opens it, and it then stays open.
-##
-## Returns the failure to start, once, for the host to show; success otherwise.
+## The first press is the consent and opens the microphone (also the user gesture a browser wants; in open-mic mode it stays open). Returns the failure to start, once, for the host to show.
 func update_talk(held: bool) -> DotResult:
 	if not server_enabled:
 		if is_talking():
@@ -371,16 +332,9 @@ func set_server_enabled(on: bool) -> void:
 	server_enabled_changed.emit(on)
 
 
-## Keeps [member server_enabled] on the server's `sv_voice_enable`, as [param source]
-## reports it: dot-server's `DotClientLink`, or anything with `replicated_cvar(name,
-## fallback) -> String` and a `replicated_cvar_changed(name, value)` signal. True when
-## following. Duck-typed, the shape dot-combat's `follow_cvars` has; a source that cannot
-## replicate (an older shell's link) leaves voice on, which is what every client did before.
+## Keeps [member server_enabled] on the server's [code]sv_voice_enable[/code] as [param source] reports it: dot-server's [code]DotClientLink[/code] or anything with [code]replicated_cvar(name, fallback)[/code] and a [code]replicated_cvar_changed[/code] signal. True when following.
 ##
-## [b]A null source waits for one[/b]: the shell's link (`dot_client_link` in the registry)
-## may be published after a game builds its voice, and a client that asked too early would
-## otherwise keep voice on for ever against a server that turned it off. Returns false then,
-## and follows the link the moment it is registered.
+## A null source waits for the shell's link ([code]dot_client_link[/code] in the registry) and follows it once registered; returns false then.
 func follow_cvars(source: Object) -> bool:
 	if source == null or not is_instance_valid(source):
 		var bus := DotRegistry.signals()
@@ -462,9 +416,7 @@ func _process(delta: float) -> void:
 
 ## Reads whole frames out of the source and sends the ones the gate lets through.
 ##
-## A loop rather than one frame a tick: at 20 ms frames and a 144 Hz display there is
-## less than one frame per tick, but a hitch leaves several waiting and dropping them
-## would be an audible gap for a stall nobody heard.
+## A loop, not one frame a tick: a hitch leaves several waiting and dropping them is an audible gap.
 func _pump_capture(_delta: float) -> void:
 	if not _capturing or source == null or not source.is_running():
 		return
@@ -516,12 +468,8 @@ func _pump_capture(_delta: float) -> void:
 		frame_sent.emit(bytes.size())
 
 
-# --- Receiving -------------------------------------------------------------
 
-## Takes one packet from the server.
-##
-## Returns whether it was accepted. A host feeding a shared channel uses that to decide
-## whether to keep looking for a handler.
+## Takes one packet from the server; returns whether it was accepted, so a host on a shared channel knows whether to keep looking for a handler.
 func receive(bytes: PackedByteArray) -> bool:
 	var parsed := DotVoicePacket.from_bytes(bytes, config.frame_samples() * 4)
 
@@ -685,11 +633,7 @@ func _destroy_speaker(speaker: int) -> void:
 
 ## Hands one frame per speaker to their sink, at the rate the frames represent.
 ##
-## [b]Driven by an accumulator rather than by the frame rate.[/b] A 144 Hz client would
-## otherwise drain a 50-frames-a-second stream almost three times too fast, empty the
-## jitter buffer, and stutter for ever. The accumulator makes playback advance in real
-## time no matter what the display is doing, which is the same reason dot-net counts
-## ticks rather than frames.
+## Driven by an accumulator, not the frame rate: a 144 Hz client would drain a 50 frames-a-second stream three times too fast and stutter.
 func _pump_playback(delta: float) -> void:
 	if _speakers.is_empty():
 		return

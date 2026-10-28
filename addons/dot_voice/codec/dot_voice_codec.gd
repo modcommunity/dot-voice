@@ -2,28 +2,9 @@
 class_name DotVoiceCodec
 extends RefCounted
 
-## Turns a frame of mono samples into bytes and back.
+## Turns a frame of mono samples into bytes and back; subclass and [method register] to plug in a real codec (e.g. Opus).
 ##
-## [b]Subclass this to plug in a real codec.[/b] Godot exposes no Opus encoder to
-## GDScript, so the two shipped here are what can be written in the language: exact
-## 16-bit PCM, and IMA ADPCM at a quarter of the size. A project that ships an Opus
-## GDExtension registers it with [method register] and every other class in this addon
-## picks it up without changing, because nothing here names a codec except through
-## [method for_id].
-##
-## [codeblock]
-## class MyOpusCodec extends DotVoiceCodec:
-##     func id() -> StringName: return &"opus"
-##     func encode(samples: PackedFloat32Array) -> PackedByteArray: ...
-##     func decode(bytes: PackedByteArray, count: int) -> PackedFloat32Array: ...
-##
-## DotVoiceCodec.register(MyOpusCodec.new())
-## [/codeblock]
-##
-## [b]Samples are mono float in -1..1.[/b] Voice is mono because a microphone is one
-## microphone and stereo doubles the wire for nothing; where a listener sits relative to
-## a speaker is applied at playback, from the speaker's position, not carried in the
-## audio.
+## Samples are mono float in -1..1; listener position is applied at playback, not carried in the audio. Nothing else names a codec except through [method for_id].
 
 const CHANNEL := "voice.codec"
 
@@ -43,26 +24,21 @@ func encode(_samples: PackedFloat32Array) -> PackedByteArray:
 
 ## Decodes one frame back to [param sample_count] samples.
 ##
-## [param sample_count] is passed rather than derived because a codec may not be able to
-## tell from the bytes alone, and because a decoder that guesses wrong produces audio at
-## the wrong speed instead of an error.
+## The count is passed because a decoder that guesses wrong plays at the wrong speed instead of erroring.
 func decode(_bytes: PackedByteArray, _sample_count: int) -> PackedFloat32Array:
 	return PackedFloat32Array()
 
 
 ## Bytes one encoded frame of [param sample_count] samples takes.
 ##
-## Used for the bandwidth estimate and to size buffers. A variable-rate codec returns its
-## worst case, because the point of the number is a ceiling.
+## For the bandwidth estimate and buffer sizes; a variable-rate codec returns its worst case.
 func bytes_for(_sample_count: int) -> int:
 	return 0
 
 
 ## Whether a decoder must see every frame in order.
 ##
-## True for ADPCM and anything else carrying predictor state between frames, false for
-## PCM. [DotVoiceJitter] reads this to decide whether a gap can be concealed by simply
-## carrying on, or whether the decoder has to be reset first.
+## True for ADPCM (predictor state), false for PCM; [DotVoiceJitter] resets the decoder after a gap when true.
 func is_stateful() -> bool:
 	return false
 
@@ -72,16 +48,13 @@ func reset() -> void:
 	pass
 
 
-## A decoder cannot share state with an encoder, or with another speaker.
+## A decoder cannot share state with an encoder or another speaker.
 ##
-## [b]This is the reason [DotVoiceJitter] holds one codec per speaker[/b] rather than one
-## for the whole system. Two speakers decoded through one stateful codec interleave their
-## predictor state, and the result is not "slightly wrong", it is loud noise on both.
+## Hence [DotVoiceJitter] holds one codec per speaker: shared stateful decoding is loud noise on both.
 func duplicate_codec() -> DotVoiceCodec:
 	return null
 
 
-# --- Registry --------------------------------------------------------------
 
 static func register(codec: DotVoiceCodec) -> void:
 	if codec == null or codec.id() == &"":
@@ -92,10 +65,7 @@ static func register(codec: DotVoiceCodec) -> void:
 
 ## Returns a codec by id, or null.
 ##
-## The built-ins register themselves the first time this is called rather than in a
-## static initialiser, because GDScript gives no ordering guarantee between one static
-## initialiser and another and a registry that is sometimes empty is worse than one that
-## is always filled on demand.
+## Built-ins register on first call, not in a static initialiser: GDScript gives no ordering between static initialisers.
 static func for_id(codec_id: StringName) -> DotVoiceCodec:
 	_ensure_builtins()
 	var found: Variant = _registry.get(codec_id)

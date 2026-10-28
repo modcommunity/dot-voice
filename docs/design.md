@@ -113,3 +113,30 @@ A client asking another client not to play a muted player is not muting anybody,
 The router computes a gain per listener (`DotVoiceProximity.gain`: full inside `sv_voice_proximity_min`, zero at `sv_voice_proximity_range`, linear, inverse or quadratic between) and sends a packet only to listeners above zero, which is the bandwidth saving. The gain rides in bits 1..7 of the flags byte, so the wire version is unchanged and an older client plays at full volume. A wall between two players multiplies it by `sv_voice_proximity_occlusion_gain` when `sv_voice_proximity_occlusion` is on and the game set `occlusion_fn` (`DotVoiceProximity.ray_occluder` is one ray per listener in range). With `honour_packet_channel` and proximity as the game's mode, the team and everybody channels are exempt only when their bypass cvar says so.
 
 `DotVoiceLookMute` is the client half: the host gives it `target_fn` (who is looked at; `pick_by_angle` is a ready one), a tap on `voice_gag` gags, a second tap inside `double_tap_ms` reverts the gag and toggles a mute (voice, plus chat through `chat_mute_fn`), or `separate_keys` gives each its own action. The server only says whether it is allowed and whether everybody starts gagged. Playback positional attenuation of the engine's player stacks with the server gain; a game using both should leave `positional_playback` for panning only.
+
+## Snippets
+
+Plugging in a codec (an Opus GDExtension, say): subclass and register; nothing else in the addon names a codec except through `DotVoiceCodec.for_id`.
+
+```gdscript
+class MyOpusCodec extends DotVoiceCodec:
+    func id() -> StringName: return &"opus"
+    func encode(samples: PackedFloat32Array) -> PackedByteArray: ...
+    func decode(bytes: PackedByteArray, count: int) -> PackedFloat32Array: ...
+
+DotVoiceCodec.register(MyOpusCodec.new())
+```
+
+Adding the manager to a game (nothing opens a microphone until `start_capture`):
+
+```gdscript
+var voice := DotVoiceManager.new()
+voice.config = my_config
+voice.send_fn = func(bytes: PackedByteArray) -> void: link.send_voice(bytes)
+add_child(voice)
+
+await voice.start_capture()          # only once the player has agreed
+voice.set_talking(Input.is_action_pressed("voice"))
+```
+
+Packet header (`DotVoicePacket`, version 2): byte 0 version, 1 flags (bit 0 start of spurt, bits 1..7 gain), 2-5 speaker (u32), 6-7 sequence (u16, wraps), 8-9 sample count, 10 channel, 11 codec index (255 then a length-prefixed name), then the payload. The speaker is there because a relayed packet's transport sender is the server; sequence because UDP reorders; sample count because a decoder that guesses plays at the wrong speed; channel to pick the gain; codec because a mismatch is silent noise.

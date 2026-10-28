@@ -2,13 +2,9 @@
 class_name DotVoiceSourceBuffer
 extends DotVoiceSource
 
-## A source fed by hand. For tests, bots, and playing a recording back into the system.
+## A source fed by hand, for tests, bots and recording playback.
 ##
-## [b]This is the class the headless suite runs.[/b] Everything above it — the gate, the
-## codec, the packet, the router, the jitter buffer — is exercised by writing samples in
-## here and reading audio out of a [DotVoiceSinkBuffer] at the other end, with no audio
-## device anywhere in the process. That is the whole reason [DotVoiceSource] exists as an
-## interface rather than as a microphone.
+## The headless suite runs on this class: samples written here come out of a [DotVoiceSinkBuffer] with no audio device.
 
 var _pending: PackedFloat32Array = PackedFloat32Array()
 var _running: bool = false
@@ -69,13 +65,8 @@ func describe() -> Dictionary:
 	return {"source": "buffer", "pending": _pending.size(), "loop": loop}
 
 
-# --- Test signals ----------------------------------------------------------
 
-## A sine wave, for a signal a test can assert on.
-##
-## Speech is not a sine wave, but a sine is the one signal whose round trip through a
-## codec can be measured rather than listened to: the error is the difference, and it has
-## a number.
+## A sine wave, the one signal whose codec round-trip error can be measured.
 static func tone(
 	frequency: float, seconds: float, rate: int, amplitude: float = 0.5
 ) -> PackedFloat32Array:
@@ -89,11 +80,9 @@ static func tone(
 	return out
 
 
-## Deterministic noise, for exercising a codec's worst case.
+## Deterministic noise for a codec's worst case.
 ##
-## Seeded rather than random: a codec test that fails one run in fifty and passes the
-## rest is a test nobody trusts, and this family has already been bitten by a hash that
-## only returned half its range.
+## Seeded, so a codec test never fails one run in fifty.
 static func noise(
 	seconds: float, rate: int, amplitude: float = 0.5, seed_value: int = 12345
 ) -> PackedFloat32Array:

@@ -2,27 +2,9 @@
 class_name DotVoiceGate
 extends RefCounted
 
-## Decides whether a frame goes on the wire at all.
+## Decides whether a frame goes on the wire: push-to-talk (a host boolean, the default) or voice activation.
 ##
-## Two modes, and the second one is where all the difficulty is:
-##
-## [b]Push-to-talk[/b] is a boolean the host sets. Nothing to get wrong, which is why it
-## is the default.
-##
-## [b]Voice activation[/b] opens on loudness, and a single threshold does not work. A
-## signal sitting near the threshold crosses it many times a second, so the gate chatters
-## and the speaker is transmitted as a machine-gun of quarter-syllables. Two mechanisms
-## fix it and both are needed:
-##
-## - [b]Hysteresis.[/b] It closes at [member release_ratio] of the level it opens at, so
-##   there is a band the signal can sit in without changing anything.
-## - [b]A hangover.[/b] Once open it stays open for [member hangover_ms] after the signal
-##   drops, because speech has gaps in it and a gate that closes in them clips the end off
-##   every word. "Stop" without its consonant is "sto".
-##
-## The gate also reports the [b]start of a talk spurt[/b], which the wire format carries
-## and the jitter buffer needs: a speaker resuming after a pause has to reset the
-## receiver's timeline, or their new frames look impossibly late and are all discarded.
+## Activation needs hysteresis (close at [member release_ratio] of the open level) and a hangover ([member hangover_ms]), or a signal near the threshold chatters and speech loses its word endings. It also reports the start of a talk spurt, which resets the receiver's jitter timeline.
 
 ## RMS the gate opens at.
 var activation_rms: float = 0.02
@@ -54,9 +36,7 @@ func set_pressed(pressed: bool) -> void:
 
 ## Feeds one frame in and says whether to transmit it.
 ##
-## [param delta_ms] is how much time this frame represents, which is the frame duration
-## rather than a wall clock: a host that stalls should not burn its hangover, exactly as
-## dot-map's time limit counts simulated seconds.
+## [param delta_ms] is the frame duration, not wall clock: a host that stalls must not burn its hangover.
 func evaluate(samples: PackedFloat32Array, delta_ms: float) -> bool:
 	last_rms = rms(samples)
 
@@ -100,10 +80,9 @@ func reset() -> void:
 	_spurt_start = false
 
 
-## Root mean square of a frame, which is loudness as a listener perceives it.
+## Root mean square of a frame, which is perceived loudness.
 ##
-## Not the peak: a single loud sample is a click on the desk, and a gate that opens on it
-## transmits a room's worth of background between words.
+## Not the peak: one click opens a peak gate and transmits the room between words.
 static func rms(samples: PackedFloat32Array) -> float:
 	if samples.is_empty():
 		return 0.0

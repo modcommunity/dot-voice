@@ -4,18 +4,7 @@ extends RefCounted
 
 ## Where a frame of microphone samples comes from.
 ##
-## [b]This split is what makes the addon testable, and it is not an afterthought.[/b] A
-## voice system whose only input is a real microphone can be run by a person wearing
-## headphones and by nothing else: no headless suite, no bot, no regression test, and
-## every bug found the way this family's bugs get found, which is expensively and late.
-##
-## So the device is one implementation of an interface. [DotVoiceSourceMicrophone] opens
-## an [AudioEffectCapture]; [DotVoiceSourceBuffer] hands over samples a test wrote. The
-## manager cannot tell them apart, which means the suite exercises the same code path a
-## player does.
-##
-## The same reasoning, and the same shape, as [code]DotFpsSampler[/code]: input devices,
-## bots and demo playback behind one interface.
+## An interface so the suite and bots can use [DotVoiceSourceBuffer] and run the same path a player does; [DotVoiceSourceMicrophone] opens an [AudioEffectCapture].
 
 ## Samples per second this source produces.
 var sample_rate: int = 24000
@@ -48,15 +37,10 @@ func describe() -> Dictionary:
 	return {"source": "none"}
 
 
-# --- Shared helpers --------------------------------------------------------
 
 ## Mixes interleaved stereo frames down to mono.
 ##
-## A microphone is one microphone, but Godot hands capture back as [Vector2] frames
-## because its audio bus is stereo throughout. Averaging rather than taking the left
-## channel: some drivers put the signal on one channel and silence on the other, and
-## which one is not consistent, so taking a channel gives silence on some machines and
-## works on the developer's.
+## Averages rather than taking the left channel: some drivers put the signal on one channel and the side varies by machine.
 static func to_mono(frames: PackedVector2Array) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
 	out.resize(frames.size())
@@ -67,16 +51,9 @@ static func to_mono(frames: PackedVector2Array) -> PackedFloat32Array:
 	return out
 
 
-## Resamples mono audio from one rate to another by linear interpolation.
+## Resamples mono audio by linear interpolation.
 ##
-## [b]Honest about what this is:[/b] linear interpolation without a low-pass filter
-## aliases when downsampling, which is what going from a 44100 Hz capture to a 24000 Hz
-## wire is. The audible result on speech is a slight harshness on sibilants, and it is
-## the trade every voice system in a scripting language makes, because a proper
-## polyphase filter in GDScript costs more per frame than the codec does.
-##
-## A project that cares plugs in a GDExtension resampler by subclassing
-## [DotVoiceSource] and doing the conversion in the source.
+## No low-pass, so downsampling aliases (a slight sibilant harshness); a polyphase filter in GDScript costs more than the codec. Subclass [DotVoiceSource] to plug in a GDExtension resampler.
 static func resample(
 	samples: PackedFloat32Array, from_rate: int, to_rate: int
 ) -> PackedFloat32Array:

@@ -4,33 +4,16 @@ extends DotVoiceSource
 
 ## The real microphone, through an [AudioEffectCapture] on its own bus.
 ##
-## [b]Three things about this are not obvious and all three break it silently.[/b]
-##
-## 1. [code]audio/driver/enable_input[/code] must be true in the project settings before
-##    the audio driver starts. Setting it at runtime does nothing, and the symptom is a
-##    capture that returns zeros for ever with no error anywhere. [method start] checks
-##    it and refuses rather than pretending.
-## 2. The capture bus must not route to the speakers, or the player hears themselves with
-##    the whole system's latency added. The bus this creates sends to a silent bus for
-##    exactly that reason.
-## 3. Capture arrives at the [b]engine's mix rate[/b], not at the rate voice wants, and
-##    the difference is usually 44100 against 24000. Resampling is done here rather than
-##    later so everything downstream sees one rate.
-##
-## On the web this additionally needs the page to have been granted microphone permission
-## by the browser, which is a user gesture the game cannot perform for them. There is no
-## way to ask the engine whether that happened, so a web build that gets silence should
-## be treated as "not granted" rather than as a bug here.
+## Needs [code]audio/driver/enable_input[/code] true before the driver starts (else silent zeros; [method start] refuses), a capture bus that does not route to the speakers, and resampling here from the mix rate. On the web, silence means permission was not granted.
 
 const CHANNEL := "voice.mic"
 
 ## Bus the capture effect is installed on. Created if it does not exist.
 var bus_name: StringName = &"DotVoiceCapture"
 
-## Seconds of audio the capture effect buffers before it starts discarding.
+## Seconds the capture effect buffers before discarding.
 ##
-## Small: this is a latency budget, not a safety margin. A large buffer hides a host that
-## is not draining the capture and turns it into delay the player hears.
+## A latency budget, not a safety margin: a large buffer turns an undrained capture into audible delay.
 var buffer_seconds: float = 0.25
 
 ## Gain applied on read.
@@ -47,12 +30,9 @@ var _spill: PackedFloat32Array = PackedFloat32Array()
 ## Where the player node is parented. The source does not own a tree position.
 var host: Node = null
 
-## A stream played into the capture bus instead of the microphone. Null is the microphone.
+## A stream played into the capture bus instead of the microphone; null is the microphone.
 ##
-## For a device probe: everything after the driver's input (the capture effect, the mix
-## rate, the resampling, the encoder) runs exactly as for a person, on a machine whose audio
-## driver has no input at all (the Linux ALSA driver has none; only PulseAudio's does). Not
-## for a game: a bot speaks through [DotVoiceSourceBuffer].
+## For a device probe on a driver with no input: the capture effect, resampling and encoder run as for a person. A bot speaks through [DotVoiceSourceBuffer].
 var input_stream: AudioStream = null
 
 
@@ -63,8 +43,7 @@ func _init(p_host: Node = null, p_sample_rate: int = 24000) -> void:
 
 ## Whether this build can open a microphone at all.
 ##
-## A capability question rather than a platform one, per the family rule. Headless has no
-## audio driver, and any build can have input disabled in its project settings.
+## Headless has no audio driver, and any build can have input disabled in project settings.
 static func is_supported() -> DotResult:
 	if not ProjectSettings.get_setting("audio/driver/enable_input", false):
 		return DotResult.fail(
@@ -74,16 +53,9 @@ static func is_supported() -> DotResult:
 			+ "starts, so changing it at runtime does nothing"
 		)
 
-	# [b]The dummy driver is the only reliable tell, and it took a failing test to find
-	# out.[/b] Everything else a headless process reports looks exactly like a working
-	# sound card: `get_mix_rate()` is 44100, `get_input_device_list()` is
-	# `["Default"]`, and the bus layout is whatever the project configured. So a check
-	# built on any of those passes on a machine with no audio at all, and the symptom is
-	# a capture that returns silence for ever with nothing anywhere reporting a problem.
-	#
-	# A capability question rather than a platform one, per the family rule: this is
-	# true of a dedicated server, of CI, and of a desktop started with `--audio-driver
-	# Dummy`, and those are the same situation as far as a microphone is concerned.
+	# Only the dummy driver reliably tells: a headless process still reports a 44100 mix rate,
+	# a "Default" input device and a configured bus layout, so those checks pass with no audio.
+	# True of servers, CI and `--audio-driver Dummy`.
 	if AudioServer.has_method("get_driver_name"):
 		var driver := str(AudioServer.call("get_driver_name"))
 		if driver == "Dummy":
@@ -128,10 +100,9 @@ func start() -> DotResult:
 
 	if _bus_index < 0:
 		_bus_index = AudioServer.bus_count
-		# bus_count, not add_bus(): on a web build add_bus() goes through Godot's JS
-		# `Bus.move`, which puts the new bus AHEAD of Master and unplugs Master from the
-		# speakers -- the first press of push-to-talk would silence the whole game. See
-		# DotAudioMixer._create_bus in dot-audio for the measurement.
+		# bus_count, not add_bus(): on web add_bus() puts the new bus ahead of Master and unplugs it
+		# from the speakers, silencing the game on the first push-to-talk (see
+		# DotAudioMixer._create_bus).
 		AudioServer.bus_count = _bus_index + 1
 		AudioServer.set_bus_name(_bus_index, bus_name)
 

@@ -2,25 +2,9 @@
 class_name DotVoiceRouter
 extends Node
 
-## The server's half: who is allowed to talk, and who hears them.
+## The server's half: who is allowed to talk, and who hears them. Every decision is made here, because a client cannot be trusted to mute another.
 ##
-## [b]Every decision here is made on the server, and that is the whole point.[/b] A client
-## that asks another client not to play a muted player is not muting anybody, because the
-## muted player's own client is the one that would have to cooperate. The three controls
-## below are the ones that survive somebody running a modified build:
-##
-## - [b]Mute[/b] is checked before relaying, so a muted player's audio is not sent. A
-##   client-side mute list exists as well ([member DotVoiceManager.local_mutes]) and is a
-##   different feature: it is a preference, not a punishment.
-## - [b]The rate limit[/b] is what stops voice being a bandwidth amplifier. One speaker is
-##   relayed to every listener, so a client sending ten times the expected rate costs the
-##   server ten times that multiplied by the player count.
-## - [b]The speaker id[/b] is stamped here from the sender the transport reported. A
-##   client that could name its own speaker id could impersonate anybody, and the only
-##   symptom would be words coming out of the wrong mouth.
-##
-## Muting is duck-typed through [DotRegistry] so this addon does not depend on dot-server
-## or dot-moderation. Anything with [code]is_voice_muted(speaker) -> bool[/code] answers.
+## Mute is checked before relaying (distinct from [member DotVoiceManager.local_mutes], a preference), the rate limit stops voice being a bandwidth amplifier, and the speaker id is stamped from the transport's sender so nobody can impersonate. Muting is duck-typed through [DotRegistry] ([code]is_voice_muted(speaker) -> bool[/code]), so no dot-server or dot-moderation dependency.
 
 const CHANNEL := "voice.router"
 const SERVICE := &"dot_voice_router"
@@ -51,10 +35,8 @@ const CVAR_MODE := "sv_voice_mode"
 ## [constant CVAR_MODE]'s values, in order. Index 0 is "the game decides".
 const MODES: Array[int] = [-1, Channel.ALL, Channel.TEAM, Channel.PROXIMITY]
 
-## Proximity cvars. Range in metres; minimum distance is the radius inside which a voice is
-## at full volume; falloff is a [enum DotVoiceProximity.Falloff]; occlusion makes a wall
-## between two players quieter ([member occlusion_gain]); the bypasses let a team or global
-## channel ignore proximity (only meaningful with [member honour_packet_channel]).
+## Proximity cvars. Range in metres; minimum distance is the full-volume radius; falloff is a [enum DotVoiceProximity.Falloff];
+## occlusion quiets a wall ([member occlusion_gain]); the bypasses exempt team or global channels (needs [member honour_packet_channel]).
 const CVAR_PROX_RANGE := "sv_voice_proximity_range"
 const CVAR_PROX_MIN := "sv_voice_proximity_min"
 const CVAR_PROX_FALLOFF := "sv_voice_proximity_falloff"
@@ -72,32 +54,19 @@ signal speech_relayed(speaker: int, listeners: int)
 
 @export_group("Routing")
 
-## Whether anything is relayed at all. The operator's switch ([constant CVAR_ENABLE]).
+## Whether anything is relayed at all ([constant CVAR_ENABLE]).
 ##
-## [b]Enforced here, not on the clients.[/b] A client told voice is off hides its key and
-## stops capturing, but a client is somebody else's program: a modified one keeps sending,
-## and the only place that can make "off" mean off is the one that would relay it. Off,
-## every packet is dropped before it is parsed, counted in [member refused_disabled], and
-## the speaker is not told, for the reason a muted one is not.
+## Enforced here: a modified client keeps sending. Off, packets are dropped before parsing, counted in [member refused_disabled], and the speaker is not told.
 @export var enabled: bool = true
 
-## A channel every packet is sent on regardless of the one it names, or -1 to honour the
-## packet's. The operator's [constant CVAR_MODE].
+## A channel every packet is sent on regardless of the one it names, or -1 to honour the packet's ([constant CVAR_MODE]).
 ##
-## [b]Why the server overrides the client's channel at all:[/b] the channel is a field the
-## client writes, so a game that wants team-only voice and trusts the packet has team-only
-## voice for every player who did not edit one byte. A proximity mode on a game with no
-## [member position_fn] reaches nobody, the same safe half a team channel without a
-## [member team_fn] takes.
+## The channel is client-written, so trusting it makes team-only voice optional. Proximity with no [member position_fn] reaches nobody, as team with no [member team_fn] does.
 @export var forced_channel: int = -1
 
 ## The channel every packet is relayed on: the game's choice (team voice, proximity voice).
 ##
-## [b]Not "a packet that names none"[/b], which is what this used to say and how it behaved:
-## every packet names one (the client's [member DotVoiceManager.channel], ALL unless a host
-## changed it), so this was never read, and every game that chose team or proximity voice
-## relayed to everybody. The channel field is the client's to write, and a game's rule a
-## client can opt out of is not a rule. See [member honour_packet_channel].
+## Every packet names a channel (ALL unless the host changed it), so only a router that overrides it enforces a game's rule. See [member honour_packet_channel].
 @export var default_channel: Channel = Channel.ALL
 
 ## Use the channel each packet names instead of [member default_channel]. For a game that
@@ -138,9 +107,7 @@ signal speech_relayed(speaker: int, listeners: int)
 
 ## Seconds the rate window covers.
 ##
-## Longer tolerates a burst, which is normal: a talk spurt starts with a run of frames
-## queued while the gate opened. Shorter reacts faster to abuse. One second is the
-## compromise and is what a burst of one frame is measured against.
+## Longer tolerates a burst (a talk spurt starts with queued frames), shorter reacts faster; one second.
 @export_range(0.25, 10.0, 0.25) var rate_window_sec: float = 1.0
 
 ## Config, so the router knows the expected frame format.
@@ -148,8 +115,7 @@ var config: DotVoiceConfig = null
 
 ## Sends one packet's bytes to one peer. Set by the host, exactly like dot-net's.
 ##
-## One peer, never a broadcast address. `send(bytes, 0)` is how this family last
-## delivered a private message to everybody at once.
+## One peer, never a broadcast address.
 var send_fn: Callable = Callable()
 
 ## Returns the team of a speaker, for [constant Channel.TEAM]. Optional.
@@ -158,27 +124,16 @@ var team_fn: Callable = Callable()
 ## Returns the world position of a speaker, for [constant Channel.PROXIMITY]. Optional.
 var position_fn: Callable = Callable()
 
-## Whether a listener inside [member proximity_range] can actually hear the speaker, for
-## [constant Channel.PROXIMITY]. Optional:
+## Whether a listener inside [member proximity_range] can hear the speaker, for [constant Channel.PROXIMITY]; optional:
 ## [code]func(listener: int, speaker: int, listener_at: Vector3, speaker_at: Vector3) -> bool[/code].
-##
-## [b]A range is not a room.[/b] Two people either side of a wall can be well inside one,
-## and this addon cannot know that — it knows positions and nothing about a level, and a
-## wall list here would be a second copy of a level to keep in step with the first. So
-## the host is asked, after the squared-distance test has ruled out everybody it can
-## (this is the hottest loop in the router), with the positions [member position_fn]
-## already produced. dot-chat's router has the same seam with the same signature, so one
-## function answers both and a player cannot read somebody they cannot hear. Unset, the
-## range is the whole answer.
+## A range is not a room and this addon knows no level, so the host is asked after the distance test, with the same signature as dot-chat's router. Unset, range decides.
 var can_hear_fn: Callable = Callable()
 
 ## Returns the listeners a [constant Channel.CUSTOM] packet goes to. Optional.
 var listener_filter: Callable = Callable()
 
-## Whether a wall is between two points, for [member proximity_occlusion]:
-## [code]func(listener_at: Vector3, speaker_at: Vector3) -> bool[/code]. Cheaper and softer
-## than [member can_hear_fn], which is all-or-nothing: this one only turns the voice down.
-## [method DotVoiceProximity.ray_occluder] makes one.
+## Whether a wall is between two points, for [member proximity_occlusion]: [code]func(listener_at: Vector3, speaker_at: Vector3) -> bool[/code].
+## Softer than [member can_hear_fn]: it only turns the voice down. [method DotVoiceProximity.ray_occluder] makes one.
 var occlusion_fn: Callable = Callable()
 
 ## listener -> gain for the packet being relayed. Rebuilt per packet; empty means full.
@@ -213,7 +168,6 @@ func _exit_tree() -> void:
 	DotRegistry.unregister_instance(SERVICE, self)
 
 
-# --- Peers -----------------------------------------------------------------
 
 func add_peer(peer_id: int) -> void:
 	if not peers.has(peer_id):
@@ -228,14 +182,10 @@ func remove_peer(peer_id: int) -> void:
 	_sequences.erase(peer_id)
 
 
-# --- Muting ----------------------------------------------------------------
 
 ## Mutes a speaker on this server, when no moderation addon is installed.
 ##
-## [b]A fallback, not the feature.[/b] It lasts as long as the process and is gone the
-## moment the player reconnects, which is the first thing anybody who has been muted
-## tries. A deployment that wants a mute to mean something registers a
-## [code]dot_mute_source[/code] that persists them; dot-moderation is that.
+## A fallback: it is gone on reconnect. A deployment wanting a lasting mute registers a [code]dot_mute_source[/code] (dot-moderation is one).
 func set_muted(speaker: int, muted: bool) -> void:
 	if muted:
 		_muted[speaker] = true
@@ -245,8 +195,7 @@ func set_muted(speaker: int, muted: bool) -> void:
 
 ## Whether a speaker may be heard.
 ##
-## Asks the registered mute source first and falls back to the local set. Duck-typed, so
-## this addon compiles in a project that has neither dot-server nor dot-moderation.
+## Asks the registered mute source first, then the local set.
 func is_muted(speaker: int) -> bool:
 	var source := DotRegistry.get_service(MUTE_SERVICE)
 
@@ -256,12 +205,10 @@ func is_muted(speaker: int) -> bool:
 	return _muted.has(speaker)
 
 
-# --- Relaying --------------------------------------------------------------
 
 ## Takes a packet from [param from_peer] and relays it to whoever should hear it.
 ##
-## [param from_peer] is the sender the transport reported, never anything the packet
-## claimed. Returns how many listeners it went to, or a failure saying why not.
+## [param from_peer] is the transport's sender, never the packet's claim. Returns the listener count, or a failure.
 func relay(from_peer: int, bytes: PackedByteArray) -> DotResult:
 	if not enabled:
 		refused_disabled += 1
@@ -369,10 +316,8 @@ func _listeners_for(packet: DotVoicePacket) -> PackedInt64Array:
 
 		Channel.TEAM:
 			if not team_fn.is_valid():
-				# No way to tell teams apart, so a team channel would reach everybody.
-				# Reaching nobody is the safe half of that: a team channel that leaks to
-				# the other team is a competitive game broken in a way nobody reports,
-				# because it sounds exactly like working.
+				# No way to tell teams apart: reach nobody rather than leak a team channel to the
+				# other team, which sounds exactly like working.
 				DotLog.warn(CHANNEL, "a team packet arrived with no team_fn set")
 				return out
 
@@ -453,7 +398,6 @@ func _within_rate(peer: int, size: int) -> bool:
 	return used <= budget
 
 
-# --- Server settings -------------------------------------------------------
 
 ## The cvars [method bind_cvars] registers, as data, for a host that registers them its own way.
 func cvar_specs() -> Array[Dictionary]:
@@ -512,15 +456,9 @@ func cvar_specs() -> Array[Dictionary]:
 	return out
 
 
-## Registers [constant CVAR_ENABLE] and [constant CVAR_MODE] through [param add] and keeps
-## this router on them. [param add] is a server module's `add_cvar` (so they go when the
-## module unloads) or anything with its signature: `(name, default, description, flags) -> cvar`.
+## Registers [constant CVAR_ENABLE] and [constant CVAR_MODE] through [param add] (a server module's [code]add_cvar[/code], or anything with [code](name, default, description, flags) -> cvar[/code]) and keeps this router on them.
 ##
-## [b]Pass dot-server's FLAG_REPLICATED in [param flags][/b]: clients learn the value through
-## their link ([method DotVoiceManager.follow_cvars]) and hide the key when voice is off.
-## Duck-typed, the shape dot-combat's `bind_cvars` has, because dot-server is not a
-## dependency of this addon. The value is read back after registering, because a cvar set
-## before this ran (argv, the deploy's content.yml) already holds the operator's choice.
+## Pass dot-server's FLAG_REPLICATED so clients hide the key when voice is off ([method DotVoiceManager.follow_cvars]). Duck-typed; the value is read back, as argv or content.yml may already hold the operator's choice.
 func bind_cvars(add: Callable, flags: int = 0) -> Array:
 	var made: Array = []
 

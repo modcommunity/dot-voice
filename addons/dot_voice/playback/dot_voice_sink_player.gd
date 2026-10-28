@@ -4,15 +4,7 @@ extends DotVoiceSink
 
 ## Plays audio through an [AudioStreamGenerator], optionally positioned in the world.
 ##
-## [b]One of these per speaker, not one for everybody.[/b] A generator is a stream, and a
-## stream mixes one thing at a time; pushing two speakers into one produces whichever
-## frame arrived last. Per-speaker also gets positional audio for free, because the node
-## can sit where that player is.
-##
-## [b]`push_buffer` refuses more than the generator has room for[/b], and the frames it
-## refuses are silently gone. So [method can_accept] is checked first and the caller is
-## expected to hold the frame rather than throw it away, which is what the jitter buffer
-## is for.
+## One per speaker: a generator mixes one stream. [code]push_buffer[/code] silently drops what does not fit, so check [method can_accept] first and hold the frame.
 
 # No log channel: an audio sink written to once per voice frame. A failed start() is
 # returned and DotVoiceManager WARNs it with the speaker; an overrun is prevented by the

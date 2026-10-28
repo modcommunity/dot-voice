@@ -2,36 +2,13 @@
 class_name DotVoiceCodecAdpcm
 extends DotVoiceCodec
 
-## IMA ADPCM: four bits a sample, so a quarter of PCM's bandwidth.
+## IMA ADPCM: four bits a sample, a quarter of PCM's bandwidth, and the default codec.
 ##
-## [b]This is the default codec, and the reason is arithmetic.[/b] At 24 kHz, PCM is
-## 48 kB/s per speaker. A twenty-slot server where four people are talking relays each of
-## them to nineteen listeners, which is 3.6 MB/s of upstream on PCM and 900 kB/s on this.
-## The first number is why community servers historically shipped a codec rather than raw
-## samples.
-##
-## It costs a small amount of hiss on quiet passages, which is what a 4-bit residual
-## sounds like, and nothing at all on speech at a normal level.
-##
-## [b]It is stateful, and that is the thing to be careful about.[/b] Each frame's decode
-## depends on the predictor and step index the previous frame left behind, so:
-##
-## - every speaker needs their own instance ([method DotVoiceCodec.instance_for]);
-## - a lost frame desynchronises the decoder from the encoder until the state converges
-##   again, which is why each packet carries its own starting state in a four-byte
-##   preamble rather than relying on the stream being intact.
-##
-## That preamble costs 4 bytes on a 240-byte frame, under 2%, and buys recovery from any
-## single loss on the very next packet. Without it one dropped packet makes a speaker
-## sound wrong until they stop talking.
+## At 24 kHz, 4 talkers relayed to 19 listeners is 3.6 MB/s on PCM and 900 kB/s here. It is stateful, so each speaker needs their own instance ([method DotVoiceCodec.instance_for]), and each packet carries a 4-byte starting state so one lost packet recovers on the next. Costs slight hiss on quiet passages.
 
-## IMA's step size table. Fixed by the format; do not "tidy" it.
+## IMA's step size table, fixed by the format.
 ##
-## A [code]static var[/code] holding a [PackedInt32Array] rather than a [code]const[/code]
-## holding an [Array], and the reason is a parse error this family has documented: an
-## untyped [Array] yields [Variant] when indexed, so [code]var step := TABLE[i][/code]
-## does not compile under these projects' warning settings. Typing the container fixes it
-## at the source instead of at every use.
+## A typed [PackedInt32Array] static var, not a const [Array]: indexing an untyped Array yields Variant and fails to compile under these warning settings.
 static var STEP_TABLE := PackedInt32Array([
 	7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
 	50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230,
@@ -68,11 +45,9 @@ func reset() -> void:
 
 
 func duplicate_codec() -> DotVoiceCodec:
-	# A real copy, every time. Two speakers sharing one instance interleave their
-	# predictors, and the result is not slightly wrong, it is loud noise on both.
-	# Not this class's own name. A script that names itself in an expression, loaded after
-	# its base, cuts Godot 4.7.2's exit teardown short and leaks every script loaded before
-	# it. See docs/gdscript-hazards.md, "A script that names itself".
+	# A real copy every time: speakers sharing an instance interleave predictors into noise.
+	# Not this class's own name: a script naming itself, loaded after its base, cuts 4.7.2's exit
+	# teardown short (docs/gdscript-hazards.md, "A script that names itself").
 	return new()
 
 

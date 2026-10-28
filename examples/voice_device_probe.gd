@@ -1,27 +1,8 @@
 extends Node
 
-## The device layer the headless suite cannot reach, on a real audio device.
+## The device layer the headless suite cannot reach, on a real audio device (tools/voice_device_probe.sh, under xvfb-run).
 ##
-## [codeblock]
-## tools/voice_device_probe.sh        # xvfb-run, not --headless
-## [/codeblock]
-##
-## [b]What it runs that nothing else does:[/b] [DotVoiceSourceMicrophone] (the capture bus,
-## [AudioEffectCapture], the engine's mix rate, resampling to the wire rate) and
-## [DotVoiceSinkPlayer] (an [AudioStreamGenerator] on a real driver, which only plays inside a
-## live tree). Between them, the router and two clients over real WebSockets on 127.0.0.1.
-##
-## [b]A tone is played into the capture bus instead of a microphone[/b]
-## ([member DotVoiceSourceMicrophone.input_stream]). The Linux ALSA driver has no input at
-## all (only PulseAudio's does), and this machine has no PulseAudio; everything after the
-## driver's input runs exactly as it does for a person. The one link this does not cover is
-## the operating system handing the engine a microphone.
-##
-## [b]It measures the tone's pitch at the far end[/b], not only its loudness: a capture read
-## at the wrong mix rate is still loud, and comes out at the wrong pitch, which is how a voice
-## sounds like a chipmunk with every level meter green.
-##
-## Exit codes: 0 heard, 1 something was silent or wrong, 2 no audio device here.
+## Runs [DotVoiceSourceMicrophone] and [DotVoiceSinkPlayer] with the router and two clients over WebSockets on 127.0.0.1, playing a tone into the capture bus ([member DotVoiceSourceMicrophone.input_stream]) because ALSA has no input. It measures the far-end pitch, not only loudness: a wrong mix rate is loud but chipmunk. Exit 0 heard, 1 silent or wrong, 2 no audio device.
 
 const TONE_HZ := 440.0
 const SECONDS := 3.0

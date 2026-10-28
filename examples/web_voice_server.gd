@@ -1,12 +1,8 @@
 extends SceneTree
 
-## The server half of tools/web_voice_check.mjs: a [DotVoiceRouter] behind a WebSocket
-## listener, and a native bot client that talks a 300 Hz tone in real time and records what
-## the browser says. Prints `SERVER {json}` once a second.
+## The server half of tools/web_voice_check.mjs: a [DotVoiceRouter] behind a WebSocket listener, and a native bot talking a 300 Hz tone, recording what the browser says. Prints `SERVER {json}` once a second.
 ##
-## [codeblock]
-## godot --headless --path . --script examples/web_voice_server.gd -- --port 47380 --seconds 30
-## [/codeblock]
+## Run: godot --headless --path . --script examples/web_voice_server.gd -- --port 47380 --seconds 30
 
 var _server := TCPServer.new()
 var _router: DotVoiceRouter = null

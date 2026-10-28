@@ -3,9 +3,7 @@ extends EditorPlugin
 
 ## Editor entry point for dot-voice. Registers inspector types only.
 ##
-## No autoloads. Voice is the clearest case for one after the server, and it is still
-## wrong: a listen server runs a capture for the host and a playback for every remote
-## speaker in one process, and a singleton makes the second of anything impossible.
+## No autoloads: a listen server runs a capture and a playback per remote speaker in one process.
 
 const _ICON := "res://addons/dot_voice/icon_placeholder.svg"
 

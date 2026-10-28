@@ -1,22 +1,8 @@
 extends Node
 
-## Proves the voice path end to end without a microphone, a speaker or a socket.
+## Proves the voice path end to end without a microphone, a speaker or a socket; exits non-zero on any failure.
 ##
-## [codeblock]
-## godot --headless --path . res://examples/voice_selftest.tscn
-## [/codeblock]
-##
-## Exits non-zero on any failure.
-##
-## [b]This runs because the devices are behind an interface.[/b] A voice addon whose only
-## input is a real microphone can be exercised by a person wearing headphones and by
-## nothing else: no suite, no bot, no regression test, and every bug found the expensive
-## way. [DotVoiceSourceBuffer] writes samples in and [DotVoiceSinkBuffer] keeps what came
-## out, so the gate, the codec, the wire format, the router and the jitter buffer all run
-## exactly the code a player's machine runs.
-##
-## The one thing it cannot cover is the device layer itself, and that is said out loud
-## rather than papered over: see the last section.
+## Run: godot --headless --path . res://examples/voice_selftest.tscn. [DotVoiceSourceBuffer] and [DotVoiceSinkBuffer] stand in for the devices, so the gate, codec, wire, router and jitter buffer run the code a player runs. The device layer is the gap (last section).
 
 const CHECKS := 189
 
@@ -83,7 +69,6 @@ func _run() -> void:
 	get_tree().quit(1 if _failed > 0 else 0)
 
 
-# --- Harness ---------------------------------------------------------------
 
 func _section(title: String) -> void:
 	_entered += 1
@@ -129,7 +114,6 @@ static func _error_rms(a: PackedFloat32Array, b: PackedFloat32Array) -> float:
 	return sqrt(total / float(count))
 
 
-# --- Sections --------------------------------------------------------------
 
 func _test_config() -> void:
 	_section("the format both ends have to agree on")
@@ -375,13 +359,8 @@ func _test_packet_refusals() -> void:
 		"and a codec slot that does not exist"
 	)
 
-	# [b]A speaker id that does not fit in 16 bits.[/b] Godot hands a multiplayer peer a
-	# 31-bit random number, so this is not an edge case — it is every peer on every real
-	# connection. Version 1 wrote `speaker & 0xFFFF`, which matched nobody on the
-	# receiving end and, worse, made two players whose ids differ only above bit 16 into
-	# one speaker: one jitter buffer, interleaved sequence numbers, one stateful decoder,
-	# and both of them noise. A two-client sandbox found it by asking a listener
-	# who was talking and getting a number that was not anybody's peer id.
+	# A speaker id that does not fit in 16 bits: Godot peer ids are 31-bit, so this is every
+	# real peer. Version 1 masked to 16 bits and merged two players into one noisy speaker.
 	var far := DotVoicePacket.new()
 	far.speaker = 1399616023
 	far.sample_count = 480
@@ -1210,11 +1189,7 @@ func _test_talk_key_opens_the_microphone() -> void:
 
 ## Two clients and a router over real WebSockets on 127.0.0.1, the wire a browser uses.
 ##
-## [b]Why a socket here[/b] when every other section hands bytes across a Callable: the
-## speaker-id bug ([url=docs/history.md]history[/url]) was found by the first test that put
-## a frame on a real socket and asked the listener who was talking. This section is that,
-## kept: full-width peer ids, a frame that leaves one process-level peer and plays at another,
-## and the server's switch, armed both ways.
+## Covers full-width peer ids ([url=docs/history.md]history[/url]), a frame crossing process-level peers, and the server's switch both ways.
 func _test_over_a_real_socket() -> void:
 	_section("two clients over a real socket hear each other")
 
@@ -1649,17 +1624,9 @@ func _test_look_mute() -> void:
 	_done()
 
 
-## The honest gap, named rather than left for somebody to discover.
+## The honest gap: everything above runs with no audio device in the process.
 ##
-## [b]Everything above runs with no audio device in the process.[/b] That is deliberate
-## and it is what makes a suite possible at all, but it means the device layer itself —
-## [DotVoiceSourceMicrophone] opening a capture bus, [DotVoiceSinkPlayer] pushing into a
-## generator — is covered by nothing here. It cannot be: a headless run has no audio
-## driver, so a test that required one would fail on the machine it is meant to protect.
-##
-## This family's own rule applies and is worth writing down rather than hoping somebody
-## remembers it: [i]a code path only one deployment shape reaches is a code path nothing
-## has run.[/i] The device layer is that path until somebody puts on a headset.
+## [DotVoiceSourceMicrophone] and [DotVoiceSinkPlayer] are covered by nothing here (a headless run has no driver); see tools/voice_device_probe.sh.
 func _test_device_layer_is_not_covered() -> void:
 	_section("what this suite does not cover")
 

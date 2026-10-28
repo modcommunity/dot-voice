@@ -2,11 +2,7 @@
 class_name DotVoiceSink
 extends RefCounted
 
-## Where decoded audio goes.
-##
-## The other half of the split [DotVoiceSource] describes: [DotVoiceSinkPlayer] pushes
-## into an [AudioStreamGenerator], [DotVoiceSinkBuffer] keeps the samples so a test can
-## assert on what a listener would have heard. Nothing above this can tell them apart.
+## Where decoded audio goes: [DotVoiceSinkPlayer] pushes into an [AudioStreamGenerator], [DotVoiceSinkBuffer] keeps samples for tests.
 
 ## Samples per second this sink expects.
 var sample_rate: int = 24000
