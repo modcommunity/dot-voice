@@ -123,6 +123,7 @@ func is_muted(speaker: int) -> bool:
 
 
 func set_gag(speaker: int, on: bool) -> void:
+	DotLog.debug(CHANNEL, "gag", {"speaker": speaker, "on": on})
 	if manager != null:
 		manager.set_gag(speaker, on)
 	gag_changed.emit(speaker, on)
@@ -131,6 +132,7 @@ func set_gag(speaker: int, on: bool) -> void:
 ## Voice and chat. Voice goes through the manager's [member DotVoiceManager.local_mutes],
 ## which is what `sm` uses too, so the two features agree on who is muted.
 func set_muted(speaker: int, on: bool) -> void:
+	DotLog.debug(CHANNEL, "mute", {"speaker": speaker, "on": on})
 	if on:
 		muted[speaker] = true
 	else:
