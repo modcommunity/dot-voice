@@ -16,8 +16,8 @@ var _press_error := ""
 func _ready() -> void:
 	DotLog.set_level(DotLog.Level.WARN)
 	var url := "ws://127.0.0.1:47380"
-	var from_page: Variant = JavaScriptBridge.eval("new URLSearchParams(location.search).get('ws') || ''", true)
-	if from_page is String and from_page != "":
+	var from_page := DotWeb.query_param("ws")
+	if from_page != "":
 		url = from_page
 	var _e := _ws.connect_to_url(url)
 
