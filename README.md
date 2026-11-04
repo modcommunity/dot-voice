@@ -19,7 +19,7 @@ Needs **dot-core** and nothing else. Works with [dot-moderation](https://github.
 
 ```bash
 ln -s ../../dot-core/addons/dot_core addons/dot_core
-godot --headless --path . res://examples/voice_selftest.tscn   # 136 checks
+godot --headless --path . res://examples/voice_selftest.tscn
 tools/voice_device_probe.sh                                     # a real audio device, under Xvfb
 node tools/web_voice_check.mjs                                  # a real browser, with a fake microphone
 ```

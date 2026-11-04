@@ -33,7 +33,7 @@ Paths except `examples/` are in `addons/dot_voice/`.
 
 ## Running and testing
 
-The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything)), then `godot --headless --path . res://examples/voice_selftest.tscn` (189 checks, including two clients over real WebSockets). The device layer is not in it: `tools/voice_device_probe.sh` runs it on a real ALSA device under Xvfb, and `node tools/web_voice_check.mjs` in Chromium with a fake microphone. [design](docs/design.md#the-device-layer-and-the-browser)
+The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything)), then `godot --headless --path . res://examples/voice_selftest.tscn` (the `voice_selftest` suite, including two clients over real WebSockets). The device layer is not in it: `tools/voice_device_probe.sh` runs it on a real ALSA device under Xvfb, and `node tools/web_voice_check.mjs` in Chromium with a fake microphone. [design](docs/design.md#the-device-layer-and-the-browser)
 
 ## Rules that bite
 
