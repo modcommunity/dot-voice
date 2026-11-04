@@ -225,26 +225,7 @@ func relay(from_peer: int, bytes: PackedByteArray) -> DotResult:
 
 	var packet: DotVoicePacket = parsed.value
 
-	# [b]Stamped, not trusted.[/b] Whatever the client put in the speaker field is
-	# discarded and replaced with who actually sent it. Without this any client can put
-	# words in any other player's mouth, and the only symptom is confusion.
-	packet.speaker = from_peer
-	# The gain is the server's to set. A client's own packet carrying gain bits would
-	# otherwise be relayed with them, letting a talker choose how loud they are to others.
-	packet.gain = 1.0
-	_gains.clear()
-
-	# The server's channel, not the client's. See default_channel for the bug this was.
-	if forced_channel >= 0:
-		packet.channel = forced_channel
-	elif not honour_packet_channel:
-		packet.channel = default_channel
-
-	# Proximity is the game's mode, and a team or global channel may opt out of it.
-	if forced_channel < 0 and default_channel == Channel.PROXIMITY and honour_packet_channel:
-		if (packet.channel == Channel.TEAM and not team_bypasses_proximity) \
-				or (packet.channel == Channel.ALL and not global_bypasses_proximity):
-			packet.channel = Channel.PROXIMITY
+	_stamp(packet, from_peer)
 
 	if config != null and packet.sample_count != config.frame_samples():
 		refused_format += 1
@@ -278,8 +259,43 @@ func relay(from_peer: int, bytes: PackedByteArray) -> DotResult:
 	_sequences[from_peer] = (sequence + 1) & 0xFFFF
 	packet.sequence = sequence
 
-	var listeners := _listeners_for(packet)
 	var payload := packet.to_bytes()
+	var listeners := _deliver(packet, payload)
+
+	relayed_packets += 1
+	relayed_bytes += payload.size() * listeners.size()
+	speech_relayed.emit(from_peer, listeners.size())
+
+	return DotResult.success(listeners.size())
+
+
+## Stamps the sender and the server's gain and channel policy onto [param packet].
+func _stamp(packet: DotVoicePacket, from_peer: int) -> void:
+	# [b]Stamped, not trusted.[/b] Whatever the client put in the speaker field is
+	# discarded and replaced with who actually sent it. Without this any client can put
+	# words in any other player's mouth, and the only symptom is confusion.
+	packet.speaker = from_peer
+	# The gain is the server's to set. A client's own packet carrying gain bits would
+	# otherwise be relayed with them, letting a talker choose how loud they are to others.
+	packet.gain = 1.0
+	_gains.clear()
+
+	# The server's channel, not the client's. See default_channel for the bug this was.
+	if forced_channel >= 0:
+		packet.channel = forced_channel
+	elif not honour_packet_channel:
+		packet.channel = default_channel
+
+	# Proximity is the game's mode, and a team or global channel may opt out of it.
+	if forced_channel < 0 and default_channel == Channel.PROXIMITY and honour_packet_channel:
+		if (packet.channel == Channel.TEAM and not team_bypasses_proximity) \
+				or (packet.channel == Channel.ALL and not global_bypasses_proximity):
+			packet.channel = Channel.PROXIMITY
+
+
+## Sends [param payload] to each listener of [param packet], quieter ones patched in a copy; returns the listeners.
+func _deliver(packet: DotVoicePacket, payload: PackedByteArray) -> PackedInt64Array:
+	var listeners := _listeners_for(packet)
 
 	if send_fn.is_valid():
 		var flags_at := DotVoicePacket.OFFSET_FLAGS
@@ -292,12 +308,7 @@ func relay(from_peer: int, bytes: PackedByteArray) -> DotResult:
 				var quiet := payload.duplicate()
 				quiet.encode_u8(flags_at, quiet.decode_u8(flags_at) | DotVoicePacket.gain_bits(gain))
 				send_fn.call(int(listener), quiet)
-
-	relayed_packets += 1
-	relayed_bytes += payload.size() * listeners.size()
-	speech_relayed.emit(from_peer, listeners.size())
-
-	return DotResult.success(listeners.size())
+	return listeners
 
 
 func _listeners_for(packet: DotVoicePacket) -> PackedInt64Array:
