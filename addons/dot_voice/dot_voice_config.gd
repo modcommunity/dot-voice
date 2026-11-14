@@ -17,7 +17,7 @@ var sample_rate: int = 24000
 ## Milliseconds of audio in one packet.
 ##
 ## The latency/overhead trade: below 10 ms the header dominates, above 60 ms a lost packet is an audible hole.
-@export_range(10.0, 60.0, 10.0) var frame_ms: float = 20.0
+@export_range(10.0, 60.0, 10.0, "or_greater") var frame_ms: float = 20.0
 
 ## Codec id, resolved by [method DotVoiceCodec.for_id].
 ##
@@ -47,35 +47,35 @@ var sample_rate: int = 24000
 ## Milliseconds the gate stays open after the signal drops.
 ##
 ## Speech has gaps; without a hangover words lose their consonants.
-@export_range(0.0, 2000.0, 10.0) var hangover_ms: float = 250.0
+@export_range(0.0, 2000.0, 10.0, "or_greater") var hangover_ms: float = 250.0
 
 ## Microphone gain, applied before the gate.
-@export_range(0.1, 8.0, 0.1) var input_gain: float = 1.0
+@export_range(0.1, 8.0, 0.1, "or_greater") var input_gain: float = 1.0
 
 @export_group("Playback")
 
 ## Milliseconds of audio held before a speaker starts playing (the jitter buffer).
 ##
 ## Zero stutters on the first late packet; too much and people talk over each other.
-@export_range(0.0, 500.0, 10.0) var jitter_ms: float = 60.0
+@export_range(0.0, 500.0, 10.0, "or_greater") var jitter_ms: float = 60.0
 
 ## Milliseconds the buffer may grow to before it drops the oldest frames.
 ##
 ## A reconnecting or catching-up sender would otherwise accumulate delay for ever.
-@export_range(100.0, 2000.0, 50.0) var jitter_max_ms: float = 400.0
+@export_range(100.0, 2000.0, 50.0, "or_greater") var jitter_max_ms: float = 400.0
 
 ## Output gain, applied per speaker after decode.
-@export_range(0.0, 4.0, 0.05) var output_gain: float = 1.0
+@export_range(0.0, 4.0, 0.05, "or_greater") var output_gain: float = 1.0
 
 @export_group("Routing")
 
 ## Metres a proximity channel can be heard over. 0 disables the falloff.
-@export_range(0.0, 500.0, 1.0) var proximity_range: float = 40.0
+@export_range(0.0, 500.0, 1.0, "or_greater") var proximity_range: float = 40.0
 
 ## Bytes per second one speaker may send before the server stops relaying.
 ##
 ## Stops voice being an amplifier (one speaker costs the server rate times player count). Enforced on the server; a client's own limit is not a limit.
-@export_range(0, 65536, 256) var max_bytes_per_second: int = 4096
+@export_range(0, 65536, 256, "or_greater") var max_bytes_per_second: int = 4096
 
 
 func env_prefix() -> String:

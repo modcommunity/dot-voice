@@ -75,12 +75,12 @@ signal speech_relayed(speaker: int, listeners: int)
 @export var honour_packet_channel: bool = false
 
 ## Metres a proximity packet carries. Mirrors [member DotVoiceConfig.proximity_range].
-@export_range(0.0, 500.0, 1.0) var proximity_range: float = 40.0
+@export_range(0.0, 500.0, 1.0, "or_greater") var proximity_range: float = 40.0
 
 @export_group("Proximity")
 
 ## Metres inside which a proximity voice is at full volume.
-@export_range(0.0, 100.0, 0.5) var proximity_min_distance: float = 2.0
+@export_range(0.0, 100.0, 0.5, "or_greater") var proximity_min_distance: float = 2.0
 
 ## How loudness falls between the minimum distance and [member proximity_range].
 @export var proximity_falloff: DotVoiceProximity.Falloff = DotVoiceProximity.Falloff.INVERSE
@@ -103,12 +103,12 @@ signal speech_relayed(speaker: int, listeners: int)
 @export_group("Limits")
 
 ## Bytes per second one speaker may put on the wire. 0 disables the limit.
-@export_range(0, 65536, 256) var max_bytes_per_second: int = 4096
+@export_range(0, 65536, 256, "or_greater") var max_bytes_per_second: int = 4096
 
 ## Seconds the rate window covers.
 ##
 ## Longer tolerates a burst (a talk spurt starts with queued frames), shorter reacts faster; one second.
-@export_range(0.25, 10.0, 0.25) var rate_window_sec: float = 1.0
+@export_range(0.25, 10.0, 0.25, "or_greater") var rate_window_sec: float = 1.0
 
 ## Config, so the router knows the expected frame format.
 var config: DotVoiceConfig = null

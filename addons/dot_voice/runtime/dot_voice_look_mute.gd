@@ -36,7 +36,7 @@ var gag_action: StringName = GAG_ACTION
 var mute_action: StringName = MUTE_ACTION
 
 ## Milliseconds between two taps that make a double-tap.
-@export_range(100, 1000, 10) var double_tap_ms: int = 300
+@export_range(100, 1000, 10, "or_greater") var double_tap_ms: int = 300
 
 ## The server's switches, followed from its replicated cvars.
 var gag_allowed: bool = true
