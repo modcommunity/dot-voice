@@ -1,5 +1,3 @@
-# dot-voice
-
 Voice chat for Godot 4: microphone capture with push-to-talk or voice activation, a pluggable codec, one jitter buffer per speaker, and routing to everybody, to a team, or to whoever is close enough. The server decides who is heard.
 
 ## Install
