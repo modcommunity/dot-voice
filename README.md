@@ -3,10 +3,10 @@ Voice chat for Godot 4: microphone capture with push-to-talk or voice activation
 ## Install
 
 1. Get [Godot 4.7](https://godotengine.org/download).
-2. Either use [dot-bootstrap](https://github.com/modcommunity/dot-bootstrap), which clones every project and links the addons, or copy `addons/dot_voice/` and [dot-core](https://github.com/modcommunity/dot-core)'s `addons/dot_core/` into your project and enable dot-voice in *Project > Project Settings > Plugins*.
+2. Either use [dot-bootstrap](https://github.com/gamespice-platform/bootstrap), which clones every project and links the addons, or copy `addons/dot_voice/` and [dot-core](https://github.com/gamespice-platform/core)'s `addons/dot_core/` into your project and enable dot-voice in *Project > Project Settings > Plugins*.
 3. Set `audio/driver/enable_input=true` in your project settings.
 
-dot-core is the only dependency. [dot-moderation](https://github.com/modcommunity/dot-moderation) and [dot-server](https://github.com/modcommunity/dot-server) work with it and neither is imported.
+dot-core is the only dependency. [dot-moderation](https://github.com/gamespice-platform/moderation) and [dot-server](https://github.com/gamespice-platform/server) work with it and neither is imported.
 
 ## What you get
 
@@ -60,8 +60,8 @@ dot-core is the only dependency. [dot-moderation](https://github.com/modcommunit
 
 - Opus: Godot exposes no Opus encoder to GDScript, so the codec interface is there for a GDExtension.
 - Echo cancellation and noise suppression.
-- A voice UI. `talking_changed`, `speaker_changed` and `input_level()` are what a HUD needs; see [dot-ui](https://github.com/modcommunity/dot-ui).
-- A transport. `send_fn` takes bytes; putting them on a wire is the host's job, as in [dot-net](https://github.com/modcommunity/dot-net).
+- A voice UI. `talking_changed`, `speaker_changed` and `input_level()` are what a HUD needs; see [dot-ui](https://github.com/gamespice-platform/ui).
+- A transport. `send_fn` takes bytes; putting them on a wire is the host's job, as in [dot-net](https://github.com/gamespice-platform/net).
 - A Linux microphone without PulseAudio: Godot's ALSA driver has no input.
 
 ## Testing
@@ -70,6 +70,6 @@ Link dot-core into `addons/`, import the project once, then run `examples/voice_
 
 ## Status and licence
 
-Part of the TMC **dot-\*** family of Godot addons. Written with Claude Code and maintained by `gamemann`. Every addon has headless tests, but little of this has been played by real users yet, so expect rough edges and please [open an issue](https://github.com/modcommunity/dot-voice/issues) when you hit one.
+Part of the TMC **dot-\*** family of Godot addons. Written with Claude Code and maintained by `gamemann`. Every addon has headless tests, but little of this has been played by real users yet, so expect rough edges and please [open an issue](https://github.com/gamespice-platform/voice/issues) when you hit one.
 
 MIT licence, see [LICENSE](LICENSE). The only closed part of the TMC platform is the web back end; you can use your own instead of TMC's.
