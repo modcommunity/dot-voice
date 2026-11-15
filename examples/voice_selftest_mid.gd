@@ -52,6 +52,20 @@ func _test_end_to_end() -> void:
 	for _i in range(40):
 		await get_tree().process_frame
 
+	_check_wire(talker, on_wire, config)
+
+	await _check_heard(listener, heard, on_wire)
+
+	await _check_release(talker, mic, config)
+
+	talker.queue_free()
+	listener.queue_free()
+	await get_tree().process_frame
+	_done()
+
+
+## The talker's packets: one per frame, about one per 20 ms, one opening the spurt.
+func _check_wire(talker: DotVoiceManager, on_wire: Array[PackedByteArray], config: DotVoiceConfig) -> void:
 	_check(talker.frames_sent > 0, "frames go on the wire (%d)" % talker.frames_sent)
 	_check(on_wire.size() == talker.frames_sent, "one packet per frame")
 
@@ -70,12 +84,11 @@ func _test_end_to_end() -> void:
 			starts += 1
 	_check(starts == 1, "exactly one packet opens the spurt (%d)" % starts)
 
+
+## The packets delivered as a server would, heard, then muted locally.
+func _check_heard(listener: DotVoiceManager, heard: DotVoiceSinkBuffer, on_wire: Array[PackedByteArray]) -> void:
 	# Deliver them, as a server would, with the speaker stamped.
-	for bytes in on_wire:
-		var parsed := DotVoicePacket.from_bytes(bytes)
-		var packet: DotVoicePacket = parsed.value
-		packet.speaker = 7
-		listener.receive(packet.to_bytes())
+	_deliver_stamped(listener, on_wire)
 
 	for _i in range(60):
 		await get_tree().process_frame
@@ -99,11 +112,7 @@ func _test_end_to_end() -> void:
 	# The listener's own preference, which is a different thing from a moderator's mute.
 	heard.clear()
 	listener.set_local_mute(7, true)
-	for bytes in on_wire:
-		var parsed := DotVoicePacket.from_bytes(bytes)
-		var packet: DotVoicePacket = parsed.value
-		packet.speaker = 7
-		listener.receive(packet.to_bytes())
+	_deliver_stamped(listener, on_wire)
 	for _i in range(20):
 		await get_tree().process_frame
 	_check(
@@ -114,6 +123,8 @@ func _test_end_to_end() -> void:
 	listener.set_local_mute(7, false)
 	_check(not listener.is_locally_muted(7), "and unmuting takes")
 
+
+func _check_release(talker: DotVoiceManager, mic: DotVoiceSourceBuffer, config: DotVoiceConfig) -> void:
 	# Releasing the key stops the traffic. A gate that only ever opens is a hot mic.
 	var before := talker.frames_sent
 	talker.set_talking(false)
@@ -129,10 +140,14 @@ func _test_end_to_end() -> void:
 	talker.stop_capture()
 	_check(not talker.is_capturing(), "capture stops")
 
-	talker.queue_free()
-	listener.queue_free()
-	await get_tree().process_frame
-	_done()
+
+## Every packet on the wire to [param listener], with the speaker stamped 7 as a server would.
+func _deliver_stamped(listener: DotVoiceManager, on_wire: Array[PackedByteArray]) -> void:
+	for bytes in on_wire:
+		var parsed := DotVoicePacket.from_bytes(bytes)
+		var packet: DotVoicePacket = parsed.value
+		packet.speaker = 7
+		listener.receive(packet.to_bytes())
 
 
 func _test_router() -> void:
@@ -169,6 +184,19 @@ func _test_router() -> void:
 		packet.payload = codec.encode(frame)
 		return packet.to_bytes()
 
+	_router_all_and_team(router, delivered, make)
+	_router_proximity(router, delivered, make)
+	_router_mute(router, delivered, make)
+	var limited: DotVoiceRouter = await _router_rate_limit(config, make)
+	_router_malformed(router)
+
+	router.queue_free()
+	limited.queue_free()
+	await get_tree().process_frame
+	_done()
+
+
+func _router_all_and_team(router: DotVoiceRouter, delivered: Array[Dictionary], make: Callable) -> void:
 	# ALL reaches everybody except the speaker. Hearing yourself at a round trip's delay
 	# is the single most disorienting thing a voice system can do.
 	var relayed := router.relay(1, make.call(DotVoiceRouter.Channel.ALL, 1))
@@ -218,6 +246,8 @@ func _test_router() -> void:
 		"the safe half of an ambiguous configuration"
 	)
 
+
+func _router_proximity(router: DotVoiceRouter, delivered: Array[Dictionary], make: Callable) -> void:
 	# PROXIMITY.
 	delivered.clear()
 	router.proximity_range = 10.0
@@ -251,6 +281,8 @@ func _test_router() -> void:
 	)
 	router.can_hear_fn = Callable()
 
+
+func _router_mute(router: DotVoiceRouter, delivered: Array[Dictionary], make: Callable) -> void:
 	# Muting, on the server, where it cannot be ignored by the person being muted.
 	delivered.clear()
 	router.set_muted(1, true)
@@ -268,6 +300,8 @@ func _test_router() -> void:
 	router.relay(1, make.call(DotVoiceRouter.Channel.ALL, 1))
 	_check(delivered.size() == 3, "unmuting lets them speak again")
 
+
+func _router_rate_limit(config: DotVoiceConfig, make: Callable) -> DotVoiceRouter:
 	# The rate limit, which is what stops voice being a bandwidth amplifier.
 	var limited := DotVoiceRouter.new()
 	limited.name = "Limited"
@@ -295,7 +329,10 @@ func _test_router() -> void:
 		"one speaker is relayed to every listener, so this is the amplifier control"
 	)
 	_check(limited.refused_rate == refused, "and the refusals are counted")
+	return limited
 
+
+func _router_malformed(router: DotVoiceRouter) -> void:
 	# A malformed packet is refused rather than crashing the relay.
 	_check(
 		not router.relay(1, PackedByteArray([1, 2, 3])).ok,
@@ -312,11 +349,6 @@ func _test_router() -> void:
 		not router.relay(1, wrong.to_bytes()).ok,
 		"and so is a frame this server's format does not use"
 	)
-
-	router.queue_free()
-	limited.queue_free()
-	await get_tree().process_frame
-	_done()
 
 
 ## A cvar as dot-server's DotConVar looks to [method DotVoiceRouter.bind_cvars]: a value,
@@ -376,6 +408,22 @@ func _test_server_switch() -> void:
 	packet.payload = codec.encode(DotVoiceSourceBuffer.tone(300.0, 0.02, config.sample_rate, 0.4))
 	var bytes := packet.to_bytes()
 
+	_switch_channels(router, delivered, bytes)
+
+	_switch_cvars(router, delivered, bytes, config)
+
+	var listener: DotVoiceManager = await _switch_client(config, packet)
+
+	await _switch_late(config)
+
+	listener.queue_free()
+	router.queue_free()
+	await get_tree().process_frame
+	_done()
+
+
+## The game's channel, the operator's forced one, and off.
+func _switch_channels(router: DotVoiceRouter, delivered: Array[int], bytes: PackedByteArray) -> void:
 	# The game chose team voice; the client's packet says ALL. Armed: before default_channel
 	# was read, this reached all three and every team game was everybody's.
 	router.default_channel = DotVoiceRouter.Channel.TEAM
@@ -403,6 +451,13 @@ func _test_server_switch() -> void:
 	_r = router.relay(1, bytes)
 	_check(delivered.size() == 3, "on again, the same packet reaches everybody (%d)" % delivered.size())
 
+
+func _switch_cvars(
+	router: DotVoiceRouter,
+	delivered: Array[int],
+	bytes: PackedByteArray,
+	config: DotVoiceConfig
+) -> void:
 	# The cvars, through a module's add_cvar.
 	var made := {}
 	var add := func(n: String, v: String, _d: String, _f: int) -> Object:
@@ -418,7 +473,7 @@ func _test_server_switch() -> void:
 	_check(enable != null and enable.value == "1" and enable.high == 1.0, "sv_voice_enable defaults to 1, range 0..1")
 	enable.set_string("0")
 	delivered.clear()
-	_r = router.relay(1, bytes)
+	var _r := router.relay(1, bytes)
 	_check(not router.enabled and delivered.is_empty(), "sv_voice_enable 0 turns relaying off")
 	enable.set_string("1")
 	_r = router.relay(1, bytes)
@@ -441,6 +496,8 @@ func _test_server_switch() -> void:
 	_check(not early.enabled, "a value the operator set before binding is read back")
 	early.free()
 
+
+func _switch_client(config: DotVoiceConfig, packet: DotVoicePacket) -> DotVoiceManager:
 	# The client's half: the link says off, the manager stops.
 	var listener := DotVoiceManager.new()
 	listener.name = "SwitchListener"
@@ -477,7 +534,10 @@ func _test_server_switch() -> void:
 	_check(listener.server_enabled and told == [false, true], "the server turning it on reaches the manager (%s)" % str(told))
 	_check(not listener.follow_cvars(RefCounted.new()),
 		"a source that cannot replicate is refused, and voice stays as it was")
+	return listener
 
+
+func _switch_late(config: DotVoiceConfig) -> void:
 	# Asked before the shell published its link: it waits for one.
 	var late := DotVoiceManager.new()
 	late.name = "LateListener"
@@ -493,10 +553,4 @@ func _test_server_switch() -> void:
 	_check(not late.server_enabled, "and follows the link the moment the shell publishes it")
 	DotRegistry.unregister_instance(DotVoiceManager.LINK_SERVICE, late_link)
 	late.queue_free()
-
-	listener.queue_free()
-	router.queue_free()
-	await get_tree().process_frame
-	_done()
-
 

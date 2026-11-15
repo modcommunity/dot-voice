@@ -535,6 +535,20 @@ func _test_jitter_loss_and_overflow() -> void:
 	jitter.push(dup)
 	_check(jitter.dropped_duplicate >= 0, "a duplicate does not play twice")
 
+	_check_overflow(codec, loud)
+
+	# A frame of the wrong length is a format disagreement, not audio.
+	var wrong := DotVoicePacket.new()
+	wrong.sequence = 99
+	wrong.sample_count = 960
+	wrong.codec_id = &"pcm16"
+	wrong.payload = PackedByteArray()
+	_check(not jitter.push(wrong), "a frame of the wrong length is refused")
+	_done()
+
+
+## A sender arriving faster than real time: the buffer holds its ceiling and counts the rest.
+func _check_overflow(codec: DotVoiceCodec, loud: PackedFloat32Array) -> void:
 	# Growth. A sender arriving faster than real time would otherwise add delay for ever.
 	var flood := DotVoiceJitter.new(4, DotVoiceCodec.instance_for(&"pcm16"))
 	flood.target_frames = 1
@@ -553,14 +567,5 @@ func _test_jitter_loss_and_overflow() -> void:
 		"otherwise a catching-up sender adds delay that is never given back"
 	)
 	_check(flood.dropped_overflow > 0, "and says how much it threw away")
-
-	# A frame of the wrong length is a format disagreement, not audio.
-	var wrong := DotVoicePacket.new()
-	wrong.sequence = 99
-	wrong.sample_count = 960
-	wrong.codec_id = &"pcm16"
-	wrong.payload = PackedByteArray()
-	_check(not jitter.push(wrong), "a frame of the wrong length is refused")
-	_done()
 
 
