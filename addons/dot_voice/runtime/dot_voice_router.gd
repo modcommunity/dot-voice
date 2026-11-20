@@ -4,7 +4,7 @@ extends Node
 
 ## The server's half: who is allowed to talk, and who hears them. Every decision is made here, because a client cannot be trusted to mute another.
 ##
-## Mute is checked before relaying (distinct from [member DotVoiceManager.local_mutes], a preference), the rate limit stops voice being a bandwidth amplifier, and the speaker id is stamped from the transport's sender so nobody can impersonate. Muting is duck-typed through [DotRegistry] ([code]is_voice_muted(speaker) -> bool[/code]), so no dot-server or dot-moderation dependency.
+## Mute is checked before relaying (distinct from [member DotVoiceManager.local_mutes], a preference), the rate limit stops voice being a bandwidth amplifier, and the speaker id is stamped from the transport's sender so nobody can impersonate. Muting is duck-typed through [DotRegistry] ([code]is_voice_muted(speaker) -> bool[/code]), so no GameSpice Server or GameSpice Moderation dependency.
 
 const CHANNEL := "voice.router"
 const SERVICE := &"dot_voice_router"
@@ -113,7 +113,7 @@ signal speech_relayed(speaker: int, listeners: int)
 ## Config, so the router knows the expected frame format.
 var config: DotVoiceConfig = null
 
-## Sends one packet's bytes to one peer. Set by the host, exactly like dot-net's.
+## Sends one packet's bytes to one peer. Set by the host, exactly like GameSpice Net's.
 ##
 ## One peer, never a broadcast address.
 var send_fn: Callable = Callable()
@@ -185,7 +185,7 @@ func remove_peer(peer_id: int) -> void:
 
 ## Mutes a speaker on this server, when no moderation addon is installed.
 ##
-## A fallback: it is gone on reconnect. A deployment wanting a lasting mute registers a [code]dot_mute_source[/code] (dot-moderation is one).
+## A fallback: it is gone on reconnect. A deployment wanting a lasting mute registers a [code]dot_mute_source[/code] (GameSpice Moderation is one).
 func set_muted(speaker: int, muted: bool) -> void:
 	if muted:
 		_muted[speaker] = true
@@ -469,7 +469,7 @@ func cvar_specs() -> Array[Dictionary]:
 
 ## Registers [constant CVAR_ENABLE] and [constant CVAR_MODE] through [param add] (a server module's [code]add_cvar[/code], or anything with [code](name, default, description, flags) -> cvar[/code]) and keeps this router on them.
 ##
-## Pass dot-server's FLAG_REPLICATED so clients hide the key when voice is off ([method DotVoiceManager.follow_cvars]). Duck-typed; the value is read back, as argv or content.yml may already hold the operator's choice.
+## Pass GameSpice Server's FLAG_REPLICATED so clients hide the key when voice is off ([method DotVoiceManager.follow_cvars]). Duck-typed; the value is read back, as argv or content.yml may already hold the operator's choice.
 func bind_cvars(add: Callable, flags: int = 0) -> Array:
 	var made: Array = []
 

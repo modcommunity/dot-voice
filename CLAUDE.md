@@ -1,10 +1,10 @@
-# dot-voice
+# GameSpice Voice
 
 Voice chat for Godot 4: capture, two codecs, a jitter buffer, and a server-side router that decides who hears whom. Devices sit behind an interface so the whole path runs headless.
 
 Read the family [CLAUDE.md](../../CLAUDE.md) first; this file is only what is specific to voice.
 
-**The distributable is `addons/dot_voice/`.** It requires [dot-core](../dot-core) and nothing else. dot-moderation and dot-server are optional, and neither is named by any class in the source (mutes arrive through the `dot_mute_source` registry name).
+**The distributable is `addons/dot_voice/`.** It requires [GameSpice Core](../dot-core) and nothing else. dot-moderation and dot-server are optional, and neither is named by any class in the source (mutes arrive through the `dot_mute_source` registry name).
 
 ## Read before
 

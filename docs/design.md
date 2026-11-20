@@ -14,7 +14,7 @@ DotVoiceSink    -> DotVoiceSinkPlayer         AudioStreamGenerator, flat or posi
                 -> DotVoiceSinkBuffer         keeps what a listener would have heard
 ```
 
-`examples/voice_selftest.tscn` runs with **no audio device in the process**, and everything between the two ends is the code a player runs. It is the same shape and reasoning as dot-player-controller's `DotFpsSampler`: devices, bots and demo playback behind one interface.
+`examples/voice_selftest.tscn` runs with **no audio device in the process**, and everything between the two ends is the code a player runs. It is the same shape and reasoning as GameSpice Player Controller's `DotFpsSampler`: devices, bots and demo playback behind one interface.
 
 ## The device layer is not covered, and that is said out loud
 
@@ -74,14 +74,14 @@ Godot exposes no Opus encoder to GDScript. `DotVoiceCodec.register()` is how a G
 
 **The talk-spurt flag is load-bearing.** A speaker who pauses and resumes lands in a buffer still holding their old sequence numbers, so every new frame looks impossibly late and is discarded. Without `starts_talk_spurt` they are inaudible until the sequence wraps, which at 50 frames a second is twenty-two minutes.
 
-**Playback is driven by an accumulator, not the frame rate.** A 144 Hz client would drain a 50-frames-a-second stream almost three times too fast, empty the buffer and stutter for ever. `DotVoiceManager._pump_playback` advances in real time regardless of the display, the same reason dot-net counts ticks.
+**Playback is driven by an accumulator, not the frame rate.** A 144 Hz client would drain a 50-frames-a-second stream almost three times too fast, empty the buffer and stutter for ever. `DotVoiceManager._pump_playback` advances in real time regardless of the display, the same reason GameSpice Net counts ticks.
 
 ## What the server decides, and why it has to be the server
 
 A client asking another client not to play a muted player is not muting anybody, because the muted player's own client would have to cooperate. `DotVoiceRouter` runs on the server:
 
 - **The speaker id is stamped from the transport**, never read from the packet. A client that could name its own speaker id could put words in anyone's mouth.
-- **Mute is checked before relaying**, and a muted speaker is **not told**: telling them is spam fifty times a second, and it tells them exactly when a moderator acted. Mutes come from whatever is registered as `dot_mute_source` (dot-moderation publishes it); anything with `is_voice_muted(speaker) -> bool` answers.
+- **Mute is checked before relaying**, and a muted speaker is **not told**: telling them is spam fifty times a second, and it tells them exactly when a moderator acted. Mutes come from whatever is registered as `dot_mute_source` (GameSpice Moderation publishes it); anything with `is_voice_muted(speaker) -> bool` answers.
 - **The rate limit is the amplifier control.** One speaker is relayed to every listener, so a client sending ten times the expected rate costs ten times that multiplied by the player count.
 - **A team channel with no `team_fn` reaches nobody, not everybody.** A team channel that leaks to the other team sounds exactly like working, so nobody reports it.
 - **A range is not a room.** `can_hear_fn(listener, speaker, listener_at, speaker_at) -> bool` is asked on `PROXIMITY` after the squared-distance test, only about listeners in range, with the positions `position_fn` produced. The host's level decides what blocks sound; this addon knows positions and must not learn walls. It has dot-chat's `DotChatRouter.can_hear_fn` signature on purpose, so one function answers both and nobody reads a line from somebody they cannot hear. The suite's "the server decides who hears whom" section is armed: with the call disabled, both of its checks fail.

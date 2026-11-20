@@ -30,7 +30,7 @@ func _test_end_to_end() -> void:
 	listener.sink_factory = func(_speaker: int) -> DotVoiceSink: return heard
 
 	# The wire, as a Callable. Nothing here knows what a socket is, which is the same
-	# reason dot-net takes a send_fn.
+	# reason GameSpice Net takes a send_fn.
 	var on_wire: Array[PackedByteArray] = []
 	talker.send_fn = func(bytes: PackedByteArray) -> void: on_wire.append(bytes)
 
@@ -351,7 +351,7 @@ func _router_malformed(router: DotVoiceRouter) -> void:
 	)
 
 
-## A cvar as dot-server's DotConVar looks to [method DotVoiceRouter.bind_cvars]: a value,
+## A cvar as GameSpice Server's DotConVar looks to [method DotVoiceRouter.bind_cvars]: a value,
 ## a changed signal, a range. Duck-typed there, so a stand-in is the whole contract.
 class FakeCvar:
 	extends RefCounted
@@ -371,7 +371,7 @@ class FakeCvar:
 		changed.emit(old, v)
 
 
-## A client link as dot-server's DotClientLink looks to [method DotVoiceManager.follow_cvars].
+## A client link as GameSpice Server's DotClientLink looks to [method DotVoiceManager.follow_cvars].
 class FakeLink:
 	extends RefCounted
 	signal replicated_cvar_changed(cvar_name: String, value: String)

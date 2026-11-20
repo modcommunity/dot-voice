@@ -1,7 +1,7 @@
 @tool
 extends EditorPlugin
 
-## Editor entry point for dot-voice. Registers inspector types only.
+## Editor entry point for GameSpice Voice. Registers inspector types only.
 ##
 ## No autoloads: a listen server runs a capture and a playback per remote speaker in one process.
 

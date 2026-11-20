@@ -13,15 +13,15 @@ const SERVICE := &"dot_voice_manager"
 ## Not [constant SERVICE]: a suite with a server and two clients holds several managers. Published with [method publish_as_client].
 const CLIENT_SERVICE := &"dot_voice_client"
 
-## The InputMap action held to talk. dot-menu's key table stores it as `bind_voice_talk`;
+## The InputMap action held to talk. GameSpice Menu's key table stores it as `bind_voice_talk`;
 ## [method ensure_talk_action] creates it on [constant DEFAULT_TALK_KEY] when nothing has.
 const TALK_ACTION := &"dot_voice_talk"
 
 ## The key the talk action is created on: V, the genre's, by physical position.
 const DEFAULT_TALK_KEY := KEY_V
 
-## The bus voices play on when the project has one: dot-audio's mixer creates it and
-## dot-menu's `voice_volume` sets it.
+## The bus voices play on when the project has one: GameSpice Audio's mixer creates it and
+## GameSpice Menu's `voice_volume` sets it.
 const VOICE_BUS := &"Voice"
 
 ## The gate opened or closed. For a microphone icon.
@@ -303,8 +303,8 @@ static func input_devices() -> PackedStringArray:
 	return AudioServer.get_input_device_list()
 
 
-## How loud other players are, 0..1. On the voice bus when there is one (where dot-menu's
-## `voice_volume` and dot-audio's mixer already put it), otherwise on every speaker's player.
+## How loud other players are, 0..1. On the voice bus when there is one (where GameSpice Menu's
+## `voice_volume` and GameSpice Audio's mixer already put it), otherwise on every speaker's player.
 func set_volume(linear: float) -> void:
 	var v := clampf(linear, 0.0, 4.0)
 	var bus := AudioServer.get_bus_index(playback_bus)
@@ -380,7 +380,7 @@ func publish_as_client() -> void:
 
 
 ## Creates [constant TALK_ACTION] on [constant DEFAULT_TALK_KEY] if nothing has. A key table
-## that binds it first (dot-menu's) wins, because this only fills a gap.
+## that binds it first (GameSpice Menu's) wins, because this only fills a gap.
 static func ensure_talk_action() -> void:
 	if InputMap.has_action(TALK_ACTION):
 		return
