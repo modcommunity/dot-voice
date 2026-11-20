@@ -1,4 +1,4 @@
-[![Voice - GameSpice addon](docs/banner.png)](https://moddingcommunity.com/a/222-dot-voice)
+[![Voice - GameSpice addon](docs/banner.png)](https://moddingcommunity.com/a/8-gs-voice)
 
 Voice chat for Godot 4: microphone capture with push-to-talk or voice activation, a pluggable codec, one jitter buffer per speaker, and routing to everybody, to a team, or to whoever is close enough. The server decides who is heard.
 
